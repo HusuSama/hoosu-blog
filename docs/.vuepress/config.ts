@@ -14,7 +14,7 @@ import { defineUserConfig } from 'vuepress'
 import { plumeTheme } from 'vuepress-theme-plume'
 
 export default defineUserConfig({
-  base: '/hoosu-blog/',
+  base: '/',
   lang: 'zh-CN',
   title: '知识库',
   description: '个人使用的知识库',

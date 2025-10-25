@@ -9,6 +9,10 @@ export const routes = Object.fromEntries([
   ["/blog/ccamiltr/", { loader: () => import(/* webpackChunkName: "blog_ccamiltr_index.html" */"D:/vpress-docs/blog/docs/.vuepress/.temp/pages/blog/ccamiltr/index.html.js"), meta: {"title":"自定义组件"} }],
   ["/blog/jj5vxala/", { loader: () => import(/* webpackChunkName: "blog_jj5vxala_index.html" */"D:/vpress-docs/blog/docs/.vuepress/.temp/pages/blog/jj5vxala/index.html.js"), meta: {"title":"Markdown"} }],
   ["/404.html", { loader: () => import(/* webpackChunkName: "404.html" */"D:/vpress-docs/blog/docs/.vuepress/.temp/pages/404.html.js"), meta: {"title":""} }],
+  ["/blog/", { loader: () => import(/* webpackChunkName: "blog_index.html" */"D:/vpress-docs/blog/docs/.vuepress/.temp/pages/blog/index.html.js"), meta: {"title":"Blog"} }],
+  ["/blog/tags/", { loader: () => import(/* webpackChunkName: "blog_tags_index.html" */"D:/vpress-docs/blog/docs/.vuepress/.temp/pages/blog/tags/index.html.js"), meta: {"title":"标签"} }],
+  ["/blog/archives/", { loader: () => import(/* webpackChunkName: "blog_archives_index.html" */"D:/vpress-docs/blog/docs/.vuepress/.temp/pages/blog/archives/index.html.js"), meta: {"title":"归档"} }],
+  ["/blog/categories/", { loader: () => import(/* webpackChunkName: "blog_categories_index.html" */"D:/vpress-docs/blog/docs/.vuepress/.temp/pages/blog/categories/index.html.js"), meta: {"title":"分类"} }],
 ]);
 
 if (import.meta.webpackHot) {
