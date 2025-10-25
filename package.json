@@ -1,0 +1,38 @@
+{
+  "name": "知识库",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "个人使用的知识库",
+  "packageManager": "pnpm@10.4.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@parcel/watcher",
+      "esbuild"
+    ]
+  },
+  "author": "1538379200 <1538379200@qq.com>",
+  "license": "MIT",
+  "engines": {
+    "node": "^20.6.0 || >=22.0.0"
+  },
+  "scripts": {
+    "docs:dev": "vuepress dev docs",
+    "docs:dev-clean": "vuepress dev docs --clean-cache --clean-temp",
+    "docs:build": "vuepress build docs --clean-cache --clean-temp",
+    "docs:preview": "http-server docs/.vuepress/dist",
+    "vp-update": "pnpm dlx vp-update"
+  },
+  "devDependencies": {
+    "@iconify-json/vscode-icons": "^1.2.31",
+    "@vuepress/bundler-vite": "2.0.0-rc.24",
+    "http-server": "^14.1.1",
+    "typescript": "^5.9.3",
+    "vue": "^3.5.22",
+    "vuepress": "2.0.0-rc.24",
+    "vuepress-theme-plume": "1.0.0-rc.169"
+  },
+  "dependencies": {
+    "@iconify/json": "^2.2.394",
+    "@vuepress/shiki-twoslash": "2.0.0-rc.112"
+  }
+}
