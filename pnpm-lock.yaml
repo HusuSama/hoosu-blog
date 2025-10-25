@@ -9,26 +9,26 @@ importers:
   .:
     dependencies:
       '@iconify/json':
-        specifier: ^2.2.394
+        specifier: 2.2.394
         version: 2.2.394
       '@vuepress/shiki-twoslash':
         specifier: 2.0.0-rc.112
         version: 2.0.0-rc.112(typescript@5.9.3)(vue@3.5.22(typescript@5.9.3))(vuepress@2.0.0-rc.24(@vuepress/bundler-vite@2.0.0-rc.24(@types/node@24.7.2)(typescript@5.9.3))(typescript@5.9.3)(vue@3.5.22(typescript@5.9.3)))
     devDependencies:
       '@iconify-json/vscode-icons':
-        specifier: ^1.2.31
+        specifier: 1.2.31
         version: 1.2.31
       '@vuepress/bundler-vite':
         specifier: 2.0.0-rc.24
         version: 2.0.0-rc.24(@types/node@24.7.2)(typescript@5.9.3)
       http-server:
-        specifier: ^14.1.1
+        specifier: 14.1.1
         version: 14.1.1
       typescript:
-        specifier: ^5.9.3
+        specifier: 5.9.3
         version: 5.9.3
       vue:
-        specifier: ^3.5.22
+        specifier: 3.5.22
         version: 3.5.22(typescript@5.9.3)
       vuepress:
         specifier: 2.0.0-rc.24

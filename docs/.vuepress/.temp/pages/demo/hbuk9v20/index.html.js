@@ -1,16 +1,3 @@
 import comp from "D:/vpress-docs/blog/docs/.vuepress/.temp/pages/demo/hbuk9v20/index.html.vue"
-const data = JSON.parse("{\"path\":\"/demo/hbuk9v20/\",\"title\":\"foo\",\"lang\":\"zh-CN\",\"frontmatter\":{\"title\":\"foo\",\"createTime\":\"2025/10/12 11:13:21\",\"permalink\":\"/demo/hbuk9v20/\"},\"readingTime\":{\"minutes\":0.11,\"words\":11},\"git\":{},\"filePathRelative\":\"demo/foo.md\",\"headers\":[]}")
+const data = JSON.parse("{\"path\":\"/demo/hbuk9v20/\",\"title\":\"foo\",\"lang\":\"zh-CN\",\"frontmatter\":{\"title\":\"foo\",\"createTime\":\"2025/10/12 11:13:21\",\"permalink\":\"/demo/hbuk9v20/\"},\"readingTime\":{\"minutes\":0.11,\"words\":11},\"git\":{\"createdTime\":1761359921000,\"updatedTime\":1761359921000,\"contributors\":[{\"name\":\"1538379200\",\"username\":\"1538379200\",\"email\":\"1538379200@qq.com\",\"commits\":1,\"avatar\":\"https://avatars.githubusercontent.com/1538379200?v=4\",\"url\":\"https://github.com/1538379200\"}]},\"filePathRelative\":\"demo/foo.md\",\"headers\":[]}")
 export { comp, data }
-
-if (import.meta.webpackHot) {
-  import.meta.webpackHot.accept()
-  if (__VUE_HMR_RUNTIME__.updatePageData) {
-    __VUE_HMR_RUNTIME__.updatePageData(data)
-  }
-}
-
-if (import.meta.hot) {
-  import.meta.hot.accept(({ data }) => {
-    __VUE_HMR_RUNTIME__.updatePageData(data)
-  })
-}

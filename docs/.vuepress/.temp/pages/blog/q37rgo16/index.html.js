@@ -1,16 +1,3 @@
 import comp from "D:/vpress-docs/blog/docs/.vuepress/.temp/pages/blog/q37rgo16/index.html.vue"
-const data = JSON.parse("{\"path\":\"/blog/q37rgo16/\",\"title\":\"go-zero 踩坑\",\"lang\":\"zh-CN\",\"frontmatter\":{\"title\":\"go-zero 踩坑\",\"createTime\":\"2025/10/12 11:53:07\",\"permalink\":\"/blog/q37rgo16/\",\"tags\":[\"golang\"]},\"readingTime\":{\"minutes\":17.55,\"words\":1755},\"git\":{},\"filePathRelative\":\"blog/golang/go-zero.md\",\"headers\":[],\"categoryList\":[{\"id\":\"21cc28\",\"sort\":10001,\"name\":\"golang\"}]}")
+const data = JSON.parse("{\"path\":\"/blog/q37rgo16/\",\"title\":\"go-zero 踩坑\",\"lang\":\"zh-CN\",\"frontmatter\":{\"title\":\"go-zero 踩坑\",\"createTime\":\"2025/10/12 11:53:07\",\"permalink\":\"/blog/q37rgo16/\",\"tags\":[\"golang\"]},\"readingTime\":{\"minutes\":17.55,\"words\":1755},\"git\":{\"createdTime\":1761359921000,\"updatedTime\":1761359921000,\"contributors\":[{\"name\":\"1538379200\",\"username\":\"1538379200\",\"email\":\"1538379200@qq.com\",\"commits\":1,\"avatar\":\"https://avatars.githubusercontent.com/1538379200?v=4\",\"url\":\"https://github.com/1538379200\"}]},\"filePathRelative\":\"blog/golang/go-zero.md\",\"headers\":[],\"categoryList\":[{\"id\":\"21cc28\",\"sort\":10000,\"name\":\"golang\"}]}")
 export { comp, data }
-
-if (import.meta.webpackHot) {
-  import.meta.webpackHot.accept()
-  if (__VUE_HMR_RUNTIME__.updatePageData) {
-    __VUE_HMR_RUNTIME__.updatePageData(data)
-  }
-}
-
-if (import.meta.hot) {
-  import.meta.hot.accept(({ data }) => {
-    __VUE_HMR_RUNTIME__.updatePageData(data)
-  })
-}
