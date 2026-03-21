@@ -7,9 +7,9 @@ import {
   ref,
   shallowRef,
   watch
-} from "./chunk-7KJEB22P.js";
+} from "./chunk-T2ZTTVBS.js";
 
-// node_modules/.pnpm/@iconify+vue@5.0.0_vue@3.5.22_typescript@5.9.3_/node_modules/@iconify/vue/dist/iconify.mjs
+// node_modules/.pnpm/@iconify+vue@5.0.0_vue@3.5.26_typescript@5.9.3_/node_modules/@iconify/vue/dist/iconify.mjs
 var matchIconName = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 var stringToIcon = (value, validate, allowSimpleName, provider = "") => {
   const colonSeparated = value.split(":");

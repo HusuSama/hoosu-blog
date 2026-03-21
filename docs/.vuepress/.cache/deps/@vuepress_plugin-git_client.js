@@ -1,24 +1,24 @@
 import {
   isLinkHttp,
   useLocale
-} from "./chunk-75VIVT23.js";
+} from "./chunk-N4YRYWP6.js";
 import {
   useToggle
-} from "./chunk-SAGCNS7X.js";
+} from "./chunk-Y5YREO2J.js";
 import {
   computed,
   defineComponent,
   h,
   toValue
-} from "./chunk-7KJEB22P.js";
+} from "./chunk-T2ZTTVBS.js";
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/composables/useChangelog.js
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/composables/useChangelog.js
 import { useData } from "vuepress/client";
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/options.js
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/options.js
 var gitOptions = typeof __GIT_OPTIONS__ === "undefined" ? {} : __GIT_OPTIONS__;
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/utils/resolveRepoLink.js
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/utils/resolveRepoLink.js
 var resolveRepoLink = (link, provider) => {
   if (!link || isLinkHttp(link))
     return link;
@@ -29,7 +29,7 @@ var resolveRepoLink = (link, provider) => {
   return link;
 };
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/composables/useChangelog.js
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/composables/useChangelog.js
 var RE_ISSUE = /#(\d+)/g;
 var useChangelog = typeof __GIT_CHANGELOG__ === "boolean" && __GIT_CHANGELOG__ ? (enabled = true) => {
   const { frontmatter, lang, page } = useData();
@@ -62,7 +62,7 @@ var useChangelog = typeof __GIT_CHANGELOG__ === "boolean" && __GIT_CHANGELOG__ ?
   });
 } : () => computed(() => []);
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/composables/useContributors.js
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/composables/useContributors.js
 import { useData as useData2 } from "vuepress/client";
 var useContributors = typeof __GIT_CONTRIBUTORS__ === "boolean" && __GIT_CONTRIBUTORS__ ? (enabled = true) => {
   const { frontmatter, page } = useData2();
@@ -73,11 +73,11 @@ var useContributors = typeof __GIT_CONTRIBUTORS__ === "boolean" && __GIT_CONTRIB
   });
 } : () => computed(() => []);
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/composables/useGitLocales.js
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/composables/useGitLocales.js
 var locales = typeof __GIT_LOCALES__ === "undefined" ? {} : __GIT_LOCALES__;
 var useGitLocale = () => useLocale(locales);
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/composables/useLastUpdated.js
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/composables/useLastUpdated.js
 import { useData as useData3 } from "vuepress/client";
 var useLastUpdated = (enabled = true) => {
   const { lang, page } = useData3();
@@ -102,11 +102,11 @@ var useLastUpdated = (enabled = true) => {
   });
 };
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/components/VPHeader.js
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/components/VPHeader.js
 var VPHeader = ({ level = 2, text, anchor }) => h(`h${level || 2}`, { id: anchor, tabindex: "-1" }, h("a", { href: `#${anchor}`, class: "header-anchor" }, h("span", text)));
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/components/GitContributors.js
-import "D:/vpress-docs/blog/node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/styles/contributors.css";
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/components/GitContributors.js
+import "D:/Docs/hoosu-blog/node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/styles/contributors.css";
 var GitContributor = ({ name, url, avatar }) => h(url ? "a" : "span", {
   href: url,
   target: "_blank",
@@ -141,9 +141,9 @@ var GitContributors = defineComponent({
   }
 });
 
-// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/components/GitChangelog.js
-import "D:/vpress-docs/blog/node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/styles/vars.css";
-import "D:/vpress-docs/blog/node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_72886fc4621b73ea7e771d66a1d2630e/node_modules/@vuepress/plugin-git/lib/client/styles/changelog.css";
+// node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/components/GitChangelog.js
+import "D:/Docs/hoosu-blog/node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/styles/vars.css";
+import "D:/Docs/hoosu-blog/node_modules/.pnpm/@vuepress+plugin-git@2.0.0-_2fbe1f706461608afb0d4100d6a90111/node_modules/@vuepress/plugin-git/lib/client/styles/changelog.css";
 var GitChangelog = defineComponent({
   name: "GitChangelog",
   props: {

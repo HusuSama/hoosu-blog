@@ -2,9 +2,9 @@ import {
   defineComponent,
   h,
   renderSlot
-} from "./chunk-7KJEB22P.js";
+} from "./chunk-T2ZTTVBS.js";
 
-// node_modules/.pnpm/@iconify+vue@5.0.0_vue@3.5.22_typescript@5.9.3_/node_modules/@iconify/vue/dist/offline.mjs
+// node_modules/.pnpm/@iconify+vue@5.0.0_vue@3.5.26_typescript@5.9.3_/node_modules/@iconify/vue/dist/offline.mjs
 var defaultIconDimensions = Object.freeze(
   {
     left: 0,
