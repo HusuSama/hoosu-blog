@@ -1,9 +1,14 @@
-.vp-tag-fjv5 {
+.vp-tag-jcco {
+  --vp-tag-color: #6aa1b7;
+  --vp-tag-hover-color: #5086a1;
+  --vp-tag-bg: rgba(131, 208, 218, 0.314);
+}
+.vp-tag-38ol {
   --vp-tag-color: #946300;
   --vp-tag-hover-color: #915930;
   --vp-tag-bg: rgba(234, 179, 8, 0.14);
 }
-.vp-tag-vyx4 {
+.vp-tag-fw59 {
   --vp-tag-color: #9966cc;
   --vp-tag-hover-color: #7171b8;
   --vp-tag-bg: rgba(83, 83, 167, 0.14);

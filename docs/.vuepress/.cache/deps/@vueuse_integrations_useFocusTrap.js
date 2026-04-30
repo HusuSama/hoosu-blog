@@ -1272,7 +1272,7 @@ var createFocusTrap = function createFocusTrap2(elements, userOptions) {
   return trap;
 };
 
-// node_modules/.pnpm/@vueuse+integrations@14.1.0_817cba2103832c899474407b958e0511/node_modules/@vueuse/integrations/dist/useFocusTrap-lXZ_YG-8.js
+// node_modules/.pnpm/@vueuse+integrations@14.1.0_focus-trap@7.8.0_qrcode@1.5.4_vue@3.5.26_typescript@5.9.3_/node_modules/@vueuse/integrations/dist/useFocusTrap-lXZ_YG-8.js
 function useFocusTrap(target, options = {}) {
   let trap;
   const { immediate, ...focusTrapOptions } = options;
