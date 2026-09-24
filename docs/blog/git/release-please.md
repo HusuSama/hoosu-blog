@@ -16,7 +16,7 @@ tags:
 - 不发布到 npm / PyPI / crates.io 等包管理器（需要自己在工作流里追加发布步骤）
 - 不处理复杂的分支合并策略
 - 不关心你写代码的细节，只关心提交信息是否符合 Conventional Commits
-  :::
+:::
 
 它和其他发布工具最大的差异在于 **Release PR** 的概念：变更不会立即发布，而是堆积到一个长期存在的 Release PR 中，团队随时可以审阅下一版的 changelog，决定何时合并发版。
 
@@ -56,7 +56,7 @@ release-please 完全依赖提交信息，以下前缀必须掌握：
 | `chore:` / `build:` / `ci:` / `style:` / `test:` | 杂项                       | 不触发版本（==非"可发布单元"==） |
 | `docs:` / `refactor:` / `perf:` / `deps:` | 默认不触发，部分语言会触发 | 见下表说明                       |
 
-::: warning "可发布单元（releasable units）" 是关键概念
+::: warning 可发布单元（releasable units）是关键概念
 默认情况下，只有 `feat` / `fix` / `deps` 提交会触发版本号增加并产生 Release PR。`chore` 与 `build` 不会。**Java、Python 还会把 `docs` 视为可发布单元**。这意味着你写一堆 `chore: xxx` 的提交，release-please 不会认为有需要发版的内容。
 :::
 
@@ -679,7 +679,7 @@ release-please release-pr \
 
 ## 推荐实践清单
 
-::: card-grid
+:::: card-grid
 ::: card title="使用 squash merge" icon="mdi:source-merge"
 保持线性历史，让一个 PR 对应一个 changelog 条目；与 `BEGIN_COMMIT_OVERRIDE` 配合需要 squash。
 :::
@@ -703,7 +703,7 @@ Release PR 的核心价值就在于"合并前可见 changelog"，养成审阅习
 ::: card title="CI 必须能跑在 PR 上" icon="mdi:test-tube"
 配 PAT 或 App，让单元测试 / lint 在 Release PR 上自动跑过，避免合并后才发现构建坏掉。
 :::
-:::
+::::
 
 ---
 

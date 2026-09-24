@@ -1,1 +1,10 @@
 node_modules
+
+# VuePress 构建产物与缓存（可随时重新生成，不入库）
+docs/.vuepress/.cache
+docs/.vuepress/.temp
+docs/.vuepress/dist
+
+# 系统与编辑器
+.DS_Store
+*.log

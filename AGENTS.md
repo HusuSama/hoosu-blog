@@ -114,32 +114,109 @@ H~2~O，10^2^
 
 ## 三、提示与警报
 
+> [!WARNING]
+> **本章语法存在静默降级**
+> 写错时**构建依然成功、没有任何报错**，只是渲染成普通引用或纯文本段落。
+> 因此凡是用到 `:::` 容器或 `> [!type]` 警报，写完必须**检查构建产物**确认，不能只看"build success"：
+>
+> ```bash
+> npx vuepress build docs --clean-cache --clean-temp
+> # 产物里不该出现字面标记；hint-container 才是渲染成功的证据
+> grep -o '\[!\w*\]' docs/.vuepress/dist/**/index.html    # 应为空
+> grep -o '<p>:::*</p>' docs/.vuepress/dist/**/index.html # 应为空
+> ```
+
 ### 1. 提示容器
 
 ```markdown
 ::: tip 小贴士
 内容
 :::
+
+::: details 点击展开
+折叠内容，渲染为原生 `<details>`
+:::
 ```
 
-可用：`note` `info` `tip` `warning` `caution` `details`（折叠详情）。
+可用类型：`info` `note` `tip` `warning` `caution` `important` `details` `danger`
+
+| 类型 | 说明 |
+| :-- | :-- |
+| `info` `note` `tip` `warning` `caution` `important` | 六种常规容器 |
+| `danger` | `caution` 的别名（兼容旧主题），渲染为 caution 样式 |
+| `details` | 渲染为 `<details><summary>`，用于折叠次要内容 |
+
+三条硬规则：
+
+1. **标题里可以写行内 markdown**，如 `::: tip **加粗**与 \`代码\``；
+   省略标题时按类型显示本地化文案（`tip`→提示、`warning`→警告、`details`→详情）。
+2. **不要给标题加引号**：`::: warning "标题"` 会把引号当字面字符输出，
+   正确写法是 `::: warning 标题`。
+3. **闭合标记必须是行首独立的 `:::`**，前后各留一个空行（详见第 3 节）。
 
 ### 2. GitHub 风格警报
 
 ```markdown
 > [!NOTE]
 > 普通说明
+
 > [!TIP]
 > 提示
-> [!IMPORTANT]
-> 重点
-> [!WARNING]
-> 警告
-> [!CAUTION]
-> 严重警告
 ```
 
-**写作建议**：常规说明用 `tip`/`note`；阻断性问题用 `warning`/`caution`；可隐藏次要内容用 `details`。
+**支持的类型只有 6 个**（大小写不敏感）：
+
+```
+info  note  tip  warning  caution  important
+```
+
+::: warning alert 与容器的类型集合不同
+`> [!danger]`、`> [!success]`、`> [!details]` **都不支持**，写了会静默降级成普通引用。
+需要 `danger` / `details` 时改用 `:::` 容器。
+:::
+
+三条硬约束（违反任意一条即整块降级为普通引用，无报错）：
+
+1. **`]` 之后必须是行尾**，不能跟标题文字。
+
+   ```markdown
+   > [!warning] 我的标题     ❌ 错误，整块失效
+   > [!warning]              ✅ 正确
+   > **我的标题**             ← 标题只能写在正文里
+   > 正文
+   ```
+
+2. **类型名与 `[!` 之间不能有空格**：`> [! warning]` ❌，`> [!warning]` ✅。
+
+3. **每个警报之间空一行**，不要把多个警报连成一块引用。
+
+**写作建议**：常规说明用 `tip`/`note`；阻断性问题用 `warning`/`caution`；
+需要自定义标题、折叠内容、`danger` 类型时，一律改用 `:::` 容器。
+
+### 3. 容器嵌套规则
+
+**嵌套时外层必须比内层多一个冒号**，否则提前闭合、结构错位：
+
+```markdown
+:::: card-grid          ← 外层四冒号
+::: card title="A"      ← 内层三冒号
+内容
+:::
+::::
+
+::: card-grid           ← ❌ 与内层同层，末尾 ::: 会漏成纯文本
+::: card title="B"
+内容
+:::
+:::
+```
+
+配套的三条要求：
+
+1. 外层 `::::` / 内层 `:::` / 更深一层用 `:::::`，逐层加冒号；
+2. 闭合标记**必须是行首独立的 `:::`，不能有任何缩进**——缩进的 `:::` 不被识别为闭合，
+   还会导致后面最近的容器被误当作它的收尾，造成连续错位；
+3. 开启与闭合标记前后各留空行，容器内的 markdown 与块标签之间也要空行。
 
 ---
 
@@ -427,6 +504,15 @@ effect：`slide` / `fade` / `cube` / `coverflow` / `flip` / `cards` / `creative`
 8. **嵌套容器**：外层用 `::::`，内层用 `:::` 区分；容器内 markdown 与块标签间须空行。
 9. **未启用功能**：使用 `timeline` / `collapse` / `chat` / `plot` / `annotation` / `qrcode` / `npmTo` / `codeTree` / `field` / `math` 前，先确认 `.vuepress/config.ts` 中 `plumeTheme.markdown` 已开启对应开关。
 10. **首页只放骨架**：README.md 用 `home: true` + `config[]` 组合区块，不要塞入大段正文，正文请放到独立文章。
+11. **不要凭直觉扩展语法**：本指南的示例都是最小形态。给 alert 加标题、给容器加属性、
+    调整嵌套层级这类"看起来合理"的扩展写法，**必须先建一个临时 md 文件构建验证**，
+    确认产物正确后再写进正式文档。容器与警报都存在**静默降级**——
+    语法不合法时构建照样成功、没有 warning，只是渲染成普通引用或纯文本。
+12. **写完必须验产物**：不能只看 `build success`。用第三节给出的 grep 命令检查
+    产物里是否残留字面 `[!xxx]` 或 `<p>:::</p>`，那才是渲染成功的证据。
+13. **alert 标记独占一行**：`> [!tip]` 后面不能跟任何字符，标题写进正文首行（`> **标题**`）。
+14. **容器标题不加引号**：`::: warning 标题` 而非 `::: warning "标题"`，
+    引号会被当作标题文本的一部分渲染出来。
 
 ---
 
