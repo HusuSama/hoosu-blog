@@ -595,7 +595,7 @@ python -m nuitka --mode=standalone --output-dir=build main.py
 
 **哪个是运行文件？——`main.dist` 里与你源文件同名的那个**（Windows `main.exe`，macOS/Linux `main.bin`），其余 `.so`/`.dll` 都是它的依赖。
 
-**哪部分是根目录？——`main.dist/` 整个目录就是程序根目录。** 你用 `--include-data-files=xxx=assets/xxx` 指定的目标路径、程序内 `os.path.dirname(__file__)` 定位的资源，全部落在这个根目录下。程序对 `dist` 目录**外部**没有任何文件依赖，所以交付时把它当成一个不可拆的整体。
+**哪部分是根目录？——`main.dist/` 整个目录就是程序根目录。** 你用 `--include-data-files=xxx=assets/xxx` 指定的目标路径、程序内 `Path(__file__).resolve().parent` 定位的资源，全部落在这个根目录下。程序对 `dist` 目录**外部**没有任何文件依赖，所以交付时把它当成一个不可拆的整体。
 
 ### onefile：一个文件
 
@@ -606,7 +606,7 @@ python -m nuitka --mode=onefile --output-dir=build main.py
 ::: file-tree icon="colored" title="build/ —— onefile 产物"
 
 - build
-  - main.bin **交付物：单文件运行入口** # Windows 下叫 main.exe
+  - main.bin **交付物：单文件运行入口** # Windows 下叫 main.exe；与 main.dist 同级，仅 onefile 才有
   - main.build # 中间产物，不交付
   - main.dist # 中间产物（onefile 的打包原料），不交付
   - main.onefile-build # 中间产物，不交付
@@ -616,54 +616,113 @@ onefile 二进制运行时会**解压到临时目录再启动**（默认 `{TEMP}
 
 ### 程序里怎么定位文件（最容易踩的坑）
 
-编译后程序里有三个"位置指针"，含义完全不同：
+**先说 `sys.argv[0]` 是什么、为什么拿它当锚点。** `sys.argv` 是命令行参数列表，`sys.argv[0]` 恒为“程序自身被启动时的路径”，后面的元素才是用户传的参数。源码运行时它就是你敲的 `main.py` 路径（可能是相对路径，所以套 `.resolve()` 转绝对）；编译后就是 exe / `main.bin` 的真实路径。选它做锚点的理由：**用户从哪里双击、如何启动，它就指向哪里**——这是唯一从“用户视角”描述程序位置的可靠信号。对照组：`Path.cwd()` 是用户启动时所在的任意目录（完全不可控）；`__file__` 在 onefile 下指向临时解包目录（用户根本看不见）。
 
-| 指针 | standalone | onefile | 含义 |
-| :-- | :-- | :-- | :-- |
-| `os.path.dirname(sys.argv[0])` | dist 内、入口旁边 | exe 旁边 | **外部文件该放的地方** |
-| `__compiled__.containing_dir` | dist 目录的外一层 | exe 旁边 | "交付包旁边"（macOS app 模式是 `.app` 外层） |
-| `os.path.dirname(__file__)` | dist 内（资源目录） | 临时解包目录 | **内置只读资源**所在 |
+先看清编译输出到底长什么样（以 `--output-dir=build` 为例；不指定时默认输出到**执行命令时所在的目录**）：
 
-实测对比（onefile 运行 `main.bin` 时的输出）：
+::: file-tree title="standalone 编译输出结构"
+
+- build/ # 输出目录（--output-dir）
+  - main.build/ # 编译中间产物，交付时不要带
+  - main.dist/ # 交付目录：程序 + 全部依赖，整体拷走
+    - main.bin # 运行入口，仅此一个（Windows 下是 main.exe）
+    - *.so / *.dll # Python 运行时与依赖库
+    - assets/ # --include-data-files 打入的内置资源
+:::
+
+注意 `main.bin` 的位置差异：standalone 模式下它**只存在于 `main.dist/` 里面**，输出目录顶层没有 main.bin；只有 onefile 模式才会在 `main.dist` 同级多出一个最终单文件 `build/main.bin`（此时 `.dist` 降级为打包原料，里面的那个 main.bin 不是交付物），详见[前文产物结构](#standalone-一个文件夹)。
+
+也就是说 standalone 交付时，`build/main.dist/` **这个目录整体就是你的程序**；而 `app_dir()` 与 `sys.argv[0]` 写法的区别，就是指向 `main.dist` 的**外面一层（build/）还是里面**：
+
+| 指针 | 源码运行 | standalone | onefile | macOS `.app` |
+| :-- | :-- | :-- | :-- | :-- |
+| `Path(sys.argv[0]).resolve().parent`（用户视角的程序目录） | 源码目录 | `build/main.dist/` 里面，紧挨 main.bin | exe 旁边 | `.app/Contents/MacOS/` 包内部深处 |
+| `__compiled__.containing_dir`（封装为 `app_dir()`，官方推荐） | 源码目录 | `build/`，即 main.dist 的外一层 | exe 旁边 | `.app` 旁边（用户直觉位置） |
+| `Path(__file__).resolve().parent`（内置只读资源） | 源码目录 | `build/main.dist/` 里面 | 临时解包目录，退出即删 | `.app` 包内部 |
+
+实测输出（onefile 运行 `main.bin`）：
 
 ```text title="onefile 下运行 main.bin 的真实输出"
-sys.argv[0]  = /Users/me/build/main.bin
-__file__     = /var/folders/.../onefile_25821_.../main.py   # 解包临时目录，退出即删
-app_dir      = /Users/me/build
+sys.argv[0]  = /Users/me/build/main.bin                    ← exe 本体
+__file__     = /var/folders/.../onefile_25821_.../main.py   ← 临时解包目录，退出即删
+app_dir()    = /Users/me/build                             ← 与 exe 同目录
 ```
 
-于是通用定位模板可以这样写（对编译/未编译、standalone/onefile 全部适用）：
+通用定位模板（对编译/未编译、standalone/onefile 全部适用）：
 
 ```python title="main.py（资源定位模板）"
-import os
 import sys
+from pathlib import Path
 
 
-def app_dir():
-    """程序所在目录：放配置、用户数据、外部传入文件的地方。"""
+def app_dir() -> Path:
+    """程序所在目录：放配置、用户数据、外部传入文件的地方（官方推荐）。"""
     try:
-        return __compiled__.containing_dir  # noqa: F821
+        return Path(__compiled__.containing_dir)  # noqa: F821
     except NameError:
-        # 未编译时（直接 python main.py）回退
-        return os.path.dirname(os.path.abspath(sys.argv[0]))
+        return Path(sys.argv[0]).resolve().parent  # 未编译时回退
 
 
-def resource_dir():
-    """内置资源目录：--include-data-files 打进来的文件都在这。"""
-    return os.path.dirname(os.path.abspath(__file__))
+def resource_dir() -> Path:
+    """内置只读资源目录：--include-data-files 打进来的文件都在这。"""
+    return Path(__file__).resolve().parent
 
 
-# 外部文件：放在 exe / main.dist 旁边
-config_path = os.path.join(app_dir(), "config.json")
+def find_user_file(name: str) -> Path | None:
+    """用户文件两个候选位置依次找：先交付包旁边，再入口旁边。"""
+    candidates = [
+        app_dir() / name,                           # 交付包旁边（onefile: exe 旁边）
+        Path(sys.argv[0]).resolve().parent / name,  # main.dist 里（onefile: 同一个位置）
+    ]
+    return next((p for p in candidates if p.is_file()), None)
+
+
+# 用户配置（外部文件）：找不到就用默认值
+config_path = app_dir() / "config.json"
 # 内置资源：随程序分发、只读
-logo_path = os.path.join(resource_dir(), "assets", "logo.png")
+logo_path = resource_dir() / "assets" / "logo.png"
 ```
 
 ::: warning 两条铁律
 
-- **永远不要用 `os.getcwd()` 或相对路径 `"data/xxx"`** 定位资源。用户从别的目录双击 exe 时当前目录完全不受你控制。改完养成习惯：在源码目录外用 `python ../main.py` 跑一遍，能跑通再编译。
-- **用户会产生修改的文件（配置、输出、上传的数据）不要用 `--include-data-files` 内置**。onefile 模式下它们被解到临时目录，用户改完一重启就没了；正确做法是首次运行时在 `app_dir()` 下生成默认配置。
+- **定位一律锚定程序自身，禁用 `Path.cwd()` 和裸相对路径 `"data/xxx"`**。用户从哪个目录双击 exe 不受你控制；改完在源码目录外用 `python ../main.py` 跑一遍，能跑通再编译。
+- **用户会修改的文件（配置、输出、上传的数据）不要用 `--include-data-files` 内置**。onefile 下它们会被解到退出即删的临时目录；正确做法是首次运行时在 `app_dir()` 下生成默认配置，或用 `find_user_file()` 多位置查找。
 
+:::
+
+#### 用户配置与数据文件放哪
+
+两个高频疑问一起回答：**onefile 想把文件放 exe 同级**，直接用 `app_dir()`——onefile 下它与 `sys.argv[0]` 写法恒等，都指向 exe 旁边；**同一份代码换成 standalone，文件该放哪**则取决于写法：
+
+::: code-tabs
+
+@tab app_dir() 写法 → dist 外面
+
+```text title="交付布局（官方推荐）"
+交付包/                ← 把 build/main.dist 整个拷走、按需改名后的样子
+├── MyApp.dist/
+│   ├── MyApp.exe
+│   └── *.dll / *.so ...
+└── config.json        ← 放这里（dist 文件夹旁边）
+```
+
+升级 = 整个替换 dist 文件夹，用户配置不受影响；macOS `.app` 同样是“放在 `.app` 旁边”。这正是官方手册推荐这种写法的原因。
+
+@tab sys.argv[0] 写法 → dist 里面
+
+```text title="交付布局（自包含）"
+MyApp.dist/
+├── MyApp.exe
+├── *.dll / *.so ...
+└── config.json        ← 放这里（main.bin 旁边）
+```
+
+dist 是完全自包含的一个文件夹，zip 发出去解压即用；但升级覆盖 dist 会把用户配置一起冲掉，且 macOS `.app` 模式会把文件指到包内部深处。
+
+:::
+
+::: tip
+拿不准就用 `app_dir()`（官方手册推荐写法，四种运行环境里都最接近“程序旁边”的直觉，且源码运行时自动回退、开发期不用改代码）；想让用户放里放外都能跑，用模板里的 `find_user_file()` 依次找两个位置。
 :::
 
 ### 判断：源码运行还是编译后运行
@@ -721,7 +780,7 @@ if IS_ONEFILE:
 
 | 交付形态 | 怎么做 | 收货方怎么用 |
 | :-- | :-- | :-- |
-| standalone 文件夹 | 把 `main.dist` 整个目录压缩发送 | 解压后双击里面的 `main.exe` / `main.bin` |
+| standalone 文件夹 | 把 `main.dist` 整个目录压缩发送 | 解压后双击里面的 `main.exe` / `main.bin`；用户配置放在哪里由你的定位写法决定，见[上文对照表](#用户配置与数据文件放哪) |
 | onefile 单文件 | 直接发送那一个二进制，可附一份默认 `config.json` | 下载即用，会读同目录下的配置 |
 | 安装包 | 加 `--windows-create-installer`（NSIS）/ `--macos-create-installer`（DMG）/ `--linux-create-installer`（AppImage） | 装完从开始菜单/启动台打开 |
 
@@ -815,7 +874,7 @@ import os
 import sys
 from pathlib import Path
 
-# 与 exe 同级的 ms-playwright 目录
+# 与 exe 同级的 ms-playwright 目录（os 只用于设环境变量，路径一律 pathlib）
 os.environ.setdefault(
     "PLAYWRIGHT_BROWSERS_PATH",
     str(Path(sys.argv[0]).resolve().parent / "ms-playwright"),
