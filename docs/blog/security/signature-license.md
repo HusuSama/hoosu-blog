@@ -149,8 +149,6 @@ openssl genpkey -algorithm ED25519 -out license.pem
 openssl pkey -in license.pem -pubout -outform DER | tail -c 32 | xxd -p -c 64
 ```
 
-第二条命令的原理：Ed25519 公钥的 DER 编码固定为 44 字节（12 字节头部 + 32 字节公钥本体），所以 `tail -c 32` 截取的就是公钥本体，`xxd -p` 转成 hex。如果环境里没有 `xxd`，换成 `od -An -tx1 | tr -d ' \n'` 等效。
-
 输出示例（你的当然会不一样）：
 
 ```
@@ -158,6 +156,83 @@ f1e44fdfd3111c18702d39fdeb63a44a015da3567240ecee15e2b588ad4da628
 ```
 
 把这串公钥 hex 存好，三种语言的验证代码里都要嵌它。
+
+### 这条导出命令在做什么
+
+先看“验货”：`openssl asn1parse` 可以直接展示 DER 文件的内部结构（想亲眼验证时可用）：
+
+```
+$ openssl pkey -in license.pem -pubout -outform DER | openssl asn1parse -inform DER
+    0:d=0  hl=2 l= 42 cons: SEQUENCE
+    2:d=1  hl=2 l=   5 cons: SEQUENCE
+    4:d=2  hl=2 l=   3 prim: OBJECT            :ED25519
+    9:d=1  hl=2 l=  33 prim: BIT STRING
+```
+
+翻译成图：
+
+```
+44 字节 DER = 12 字节固定头部 + 32 字节公钥本体
+├─ SEQUENCE                      ← 总信封
+│  ├─ SEQUENCE
+│  │  └─ OBJECT :ED25519         ← 算法标识，声明“这是把 Ed25519 公钥”
+│  └─ BIT STRING                 ← 0x00 前缀 + 32 字节公钥本体
+```
+
+所以管道里两段各司其职：
+
+- `tail -c 32`：掐掉固定的 12 字节头部，只留公钥本体。Ed25519 的 DER 结构由规范写死为恒定 44 字节，所以才敢“盲掐”；换成 ECDSA 这类结构可变的算法，就不能这么干了。
+- `xxd -p -c 64`：把 32 字节二进制转成 64 个字符的 hex（`-p` 纯输出、`-c 64` 保持单行），即最终嵌进源码的字符串。
+
+### 为什么最终选 hex，而不是 PEM
+
+两个常见疑问：
+
+**「保存成 `license-pub.pem` 文件不行吗？」**——可以，但没必要：私钥文件里本来就包含公钥，随时 `openssl pkey -in license.pem -pubout` 都能重新导出，不存在“丢了公钥”的风险。
+
+**「把 PEM 文件里那串 Base64 直接复制进 Python 之类的代码行不行？」**——不行，报错信息正好说明了原因：
+
+```
+PEM 正文解码后的长度: 44 字节
+ValueError: An Ed25519 public key is 32 bytes long
+```
+
+PEM 正文（`BEGIN/END` 之间那段 Base64）编码的是**整个 DER 结构**（含 12 字节算法标识头），不是公钥本体——解码得到 44 字节的“信封”，而验证 API 要的是信封里那 32 字节的“信纸”。
+
+更根本的原因是终点不同：这串公钥要==嵌进三份不同语言的源码==，而三种语言的 Ed25519 入口——Python `from_public_bytes`、Go `ed25519.PublicKey(...)`、Rust `VerifyingKey::from_bytes`——**只认裸 32 字节**。硬要用 PEM 字符串的话：
+
+| 语言 | 嵌 hex | 嵌 PEM |
+| :-- | :-- | :-- |
+| Python | hex 解码，一步 | `load_pem_public_key()`，也简单 |
+| Go | hex 解码，一步 | `pem.Decode` + `x509.ParsePKIXPublicKey` + 类型断言，三步 |
+| Rust | hex 解码，一步 | ed25519-dalek 不支持 PEM，还得再引入解析库 |
+
+结论：在你自己的电脑上用一条管道把格式翻译做好，三份交付代码就都能保持“一行加载”，也不用处理多行字符串的换行问题。
+
+### 没有 xxd 的环境怎么办
+
+- macOS / Linux：基本都自带 `xxd`（随 vim 发布）；万一没有，用 `od` 等效替代（输出完全一致）：
+
+```sh title="od 替代版"
+openssl pkey -in license.pem -pubout -outform DER | tail -c 32 | od -An -tx1 | tr -d ' \n'
+```
+
+- Windows：装了 Git for Windows 的话，Git Bash 里同样有 `xxd`；用原生 PowerShell 则不需要任何额外工具：
+
+```powershell title="PowerShell 版"
+# 先导出二进制 DER 文件
+openssl pkey -in license.pem -pubout -outform DER -out pub.der
+# 取末尾 32 字节，转成小写 hex
+$b = [System.IO.File]::ReadAllBytes("pub.der")[-32..-1]
+([System.BitConverter]::ToString($b)).Replace("-", "").ToLower()
+```
+
+- 兕底方案：反正签发工具也要用 Python，两行就够（三处方式输出都一致）：
+
+```sh title="Python 兕底版"
+openssl pkey -in license.pem -pubout -outform DER -out pub.der
+python -c "print(open('pub.der','rb').read()[-32:].hex())"
+```
 
 ::: warning macOS 注意：先确认是 OpenSSL 还是 LibreSSL
 
