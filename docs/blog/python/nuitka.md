@@ -616,7 +616,35 @@ onefile 二进制运行时会**解压到临时目录再启动**（默认 `{TEMP}
 
 ### 程序里怎么定位文件（最容易踩的坑）
 
-**先说 `sys.argv[0]` 是什么、为什么拿它当锚点。** `sys.argv` 是命令行参数列表，`sys.argv[0]` 恒为“程序自身被启动时的路径”，后面的元素才是用户传的参数。源码运行时它就是你敲的 `main.py` 路径（可能是相对路径，所以套 `.resolve()` 转绝对）；编译后就是 exe / `main.bin` 的真实路径。选它做锚点的理由：**用户从哪里双击、如何启动，它就指向哪里**——这是唯一从“用户视角”描述程序位置的可靠信号。对照组：`Path.cwd()` 是用户启动时所在的任意目录（完全不可控）；`__file__` 在 onefile 下指向临时解包目录（用户根本看不见）。
+**先说 `sys.argv[0]` 是什么、为什么拿它当锚点。** `sys.argv` 是命令行参数列表，`sys.argv[0]` 恒为“程序自身被启动时的路径”，后面的元素才是用户传的参数。源码运行时它就是你敲的 `main.py` 路径（可能是相对路径，所以套 `.absolute()` 转绝对）；编译后就是 exe / `main.bin` 的真实路径。选它做锚点的理由：**用户从哪里双击、如何启动，它就指向哪里**——这是唯一从“用户视角”描述程序位置的可靠信号。对照组：`Path.cwd()` 是用户启动时所在的任意目录（完全不可控）；`__file__` 在 onefile 下指向临时解包目录（用户根本看不见）。
+
+#### 为什么不用 `sys.executable`
+
+看到这里很自然会问：Python 不是有个 `sys.executable` 表示“程序本身”吗？拿它定位不行吗？实测三个环境下的取值（同一份探针真实运行）：
+
+| 信号 | 源码运行 | standalone | onefile |
+| :-- | :-- | :-- | :-- |
+| `sys.argv[0]` | 你敲的脚本路径 | 入口二进制绝对路径 | 单文件 exe 绝对路径 |
+| `sys.executable` | ==Python 解释器本身==（如 venv 的 `bin/python`） | dist 里名为 `python` 的辅助文件 | ==临时解包目录==里的 `python`（退出即删） |
+
+`sys.executable` 的语义是“当前解释器是谁”，不是“程序在哪”：
+
+- 源码运行时它是解释器路径，离你的源码十万八千里（venv、Homebrew、系统 Python 各不相同）；
+- 编译后它也不可靠——onefile 下指向==临时解包目录==里的 `python`，用 `Path(sys.executable).parent` 定位等于每次运行都在一个不同的、退出即删的目录里找文件，必踩坑。
+
+**那为什么 PyInstaller 的教程、官方文档都拿 `sys.executable` 定位？** 因为 PyInstaller 的 bootloader 启动后会**主动把 `sys.executable` 重写为 bundle 本身**——两种模式实测（同一探针真实运行）：
+
+| 信号 | PyInstaller onedir | PyInstaller onefile | Nuitka（两种模式） |
+| :-- | :-- | :-- | :-- |
+| `sys.executable` | ==bundle 本体==（exe 完整路径） | ==单文件 exe 本身==（不是临时目录） | “解释器”：standalone 指 dist 里名为 `python` 的 dylib（实测连可执行权限都没有）；onefile 指临时解包目录里的 `python` |
+| `sys._MEIPASS` | `_internal` 数据目录 | 临时解压目录 | 不设置 |
+| 程序本体在哪 | 就是 `sys.executable` | 就是 `sys.executable` | `sys.argv[0]` / `app_dir()`（实测 `sys._base_executable` 也指向本体，但不推荐用它） |
+
+PyInstaller 这样设计有两个动机：一是官方即推荐冻结后用 `sys.executable` 拿程序路径；二是 `multiprocessing` 在 Windows 上 spawn 子进程就是直接执行 `sys.executable`，不重写它子进程就拉不起来。数据目录则独立交给 `sys._MEIPASS`，职责分离得很清楚。
+
+Nuitka 保留了 CPython 原语义（不做重写），把“程序本体”信息放在 `sys.argv[0]` 和 `__compiled__` 上。所以从 PyInstaller 迁移时，代码里的 `Path(sys.executable).parent` 定位写法和 `sys.frozen` 检测一样==必须改写==，换成 `app_dir()` 或 `Path(sys.argv[0]).absolute().parent`。
+
+定位文件只用 `sys.argv[0]` / `__compiled__.containing_dir` / `__file__` 这三个指针。此外一个实测冷知识：Nuitka 会把编译后的 `sys.argv[0]` 规范化成绝对路径（源码运行时它是你敲的原样，可能是相对路径），想拿“用户实际敲了什么”用 `__compiled__.original_argv0`。
 
 先看清编译输出到底长什么样（以 `--output-dir=build` 为例；不指定时默认输出到**执行命令时所在的目录**）：
 
@@ -653,14 +681,27 @@ app_dir()    = /Users/me/build                             ← 与 exe 同目录
 ```python title="main.py（资源定位模板）"
 import sys
 from pathlib import Path
+from typing import Protocol
+
+
+class Compiled(Protocol):
+    """__compiled__ 的形状（官方字段全集见下文属性表），按需增补。"""
+    standalone: bool
+    onefile: bool
+    containing_dir: str
+
+
+def get_compiled() -> Compiled | None:
+    """编译后返回 __compiled__；源码运行返回 None。"""
+    return globals().get("__compiled__")  # type: ignore[return-value]
 
 
 def app_dir() -> Path:
     """程序所在目录：放配置、用户数据、外部传入文件的地方（官方推荐）。"""
-    try:
-        return Path(__compiled__.containing_dir)  # noqa: F821
-    except NameError:
-        return Path(sys.argv[0]).resolve().parent  # 未编译时回退
+    compiled = get_compiled()
+    if compiled is not None:
+        return Path(compiled.containing_dir)
+    return Path(sys.argv[0]).absolute().parent  # 未编译时回退
 
 
 def resource_dir() -> Path:
@@ -671,8 +712,8 @@ def resource_dir() -> Path:
 def find_user_file(name: str) -> Path | None:
     """用户文件两个候选位置依次找：先交付包旁边，再入口旁边。"""
     candidates = [
-        app_dir() / name,                           # 交付包旁边（onefile: exe 旁边）
-        Path(sys.argv[0]).resolve().parent / name,  # main.dist 里（onefile: 同一个位置）
+        app_dir() / name,                            # 交付包旁边（onefile: exe 旁边）
+        Path(sys.argv[0]).absolute().parent / name,  # main.dist 里（onefile: 同一个位置）
     ]
     return next((p for p in candidates if p.is_file()), None)
 
@@ -689,6 +730,24 @@ logo_path = resource_dir() / "assets" / "logo.png"
 - **用户会修改的文件（配置、输出、上传的数据）不要用 `--include-data-files` 内置**。onefile 下它们会被解到退出即删的临时目录；正确做法是首次运行时在 `app_dir()` 下生成默认配置，或用 `find_user_file()` 多位置查找。
 
 :::
+
+#### 从快捷方式 / 符号链接启动会怎样
+
+用户不总是“直接双击 exe”：macOS 上常见符号链接（symlink / 替身），Windows 上常见快捷方式（.lnk）。`sys.argv[0]` 会变成什么？实测（macOS 真实运行）：
+
+| 启动方式 | `sys.argv[0]` | `.resolve()` 后 | `app_dir()` |
+| :-- | :-- | :-- | :-- |
+| onefile，链接到 exe | 链接路径（不穿透） | 真实 exe 所在目录 | ==链接所在目录==（用户直觉） |
+| standalone，链接到入口 | 链接路径（不穿透） | 真实 dist 里面 | 链接目录的上一层（失真） |
+| standalone，链接到整个 dist 目录 | 链接内的二进制路径 | 真实 dist 里面 | ==链接所在目录==（用户直觉） |
+
+三个结论：
+
+1. `sys.argv[0]` 记录的是**用户启动时敲的路径**，符号链接不会在 argv[0] 层面被穿透——`Path(sys.argv[0]).parent` 就是用户眼中的程序位置（链接旁边）；
+2. 但 `.resolve()` 会**穿透符号链接**指向真身——上面模板里 `find_user_file` 的第二个候选因此用 `.absolute()` 而不是 `.resolve()`：同样能把相对路径转绝对，但不会穿透链接，用户在链接旁边放的文件也能找到；
+3. 常规交付（用户拿到的就是 exe / dist 本体）完全不受影响；链接只是边界场景，而 `app_dir()` 在最常见的目录级链接下依然指向直觉位置。
+
+Windows 快捷方式是另一套机制：`.lnk` 只是个“启动器”，系统直接启动目标 exe，`sys.argv[0]` = 目标 exe 的完整路径（快捷方式自己放在哪都无所谓，配置要放目标 exe 旁边）；真正被快捷方式改变的是 cwd——由快捷方式的“起始位置（Start in）”栏决定，默认是快捷方式所在文件夹。这再次印证铁律一：别拿 cwd 当锚点。（Windows 部分为系统文档行为，未在本文环境实测；macOS 链接行为为同机实验实测。）
 
 #### 用户配置与数据文件放哪
 
@@ -736,7 +795,7 @@ dist 是完全自包含的一个文件夹，zip 发出去解压即用；但升�
 | `sys._MEIPASS` | 无 | 无 | 无 | `_internal` 目录 | 临时解压目录 |
 
 ::: warning PyInstaller 迁移者最大的坑
-网上广为流传的 `getattr(sys, "frozen", False)` 检测**对 Nuitka 完全失效**——Nuitka 刻意不设置 `sys.frozen` 和 `sys._MEIPASS`，因为它们是 PyInstaller 的私有约定而非 Python 标准。从 PyInstaller 迁移到 Nuitka 时，代码里所有基于这两个信号的检测分支都必须改写。
+网上广为流传的 `getattr(sys, "frozen", False)` 检测**对 Nuitka 完全失效**——Nuitka 刻意不设置 `sys.frozen` 和 `sys._MEIPASS`，因为它们是 PyInstaller 的私有约定而非 Python 标准。从 PyInstaller 迁移到 Nuitka 时，代码里所有基于这两个信号的检测分支都必须改写；`sys.executable` 定位同样失效，见[上文](#为什么不用-sys-executable)。
 :::
 
 Nuitka 的标准检测写法：
@@ -746,7 +805,11 @@ def is_compiled() -> bool:
     return "__compiled__" in globals()
 ```
 
-为什么是 `in globals()`？因为 `__compiled__` 是**每个被编译模块**的模块级全局变量（不是内置对象）：主模块有、你代码里被编译的 `helpers.py` 也有；只有运行时动态加载、未被编译的 `.py` 文件里才是 `False`。前文 `app_dir()` 里的 `try: __compiled__ ... except NameError` 写法与此完全等价。
+为什么是查 `globals()`？因为 `__compiled__` 是**每个被编译模块**的模块级全局变量（不是内置对象）：主模块有、你代码里被编译的 `helpers.py` 也有；只有运行时动态加载、未被编译的 `.py` 文件里才没有。上文 `app_dir()` 里的 `globals().get("__compiled__")` 写法与此等价：都是查当前模块的全局命名空间。
+
+::: tip 别裸写 `__compiled__`
+`__compiled__` 不在任何静态检查器的已知名单里——裸写（如 `try: __compiled__ ... except NameError`，或 `IS_COMPILED and __compiled__.onefile`）会被 pyright / pylint / IDE 报 undefined-variable，`# noqa` 只能压住 flake8。合规写法就是拿字符串键去查全局命名空间：`globals().get("__compiled__")`，未编译时返回 `None`，pyflakes 实测零告警。
+:::
 
 除了判断“是不是编译产物”，`__compiled__` 对象还携带模式信息（实测属性值）：
 
@@ -758,16 +821,32 @@ def is_compiled() -> bool:
 | `.module` | `False` | `False` | 是否 `--mode=module` 编译 |
 | `.containing_dir` | dist 外层目录 | exe 所在目录 | 路径定位，见[前文](#程序里怎么定位文件-最容易踩的坑) |
 | `.original_argv0` | 启动路径 | 启动路径 | 拿原始启动命令 |
+| `.macos_bundle_mode` | `False`（app 模式为 `True`） | `False` | 是否 macOS `.app` 交付 |
+| `.no_asserts` / `.no_docstrings` / `.no_annotations` | 编译选项回显 | 同左 | `--python-flag=` 对应项是否启用 |
+| `.major` `.minor` `.micro` `.releaselevel` | 如 `4` `2` `2` `'release'` | 同左 | ==Nuitka 自身版本==（不是 Python 版本！） |
+| `.extension_filename` | `None` | `None` | 仅 `--mode=module` 时为扩展文件名 |
+
+::: tip 怕拼错属性名？官方定义与自查方法
+`__compiled__` 有官方类型：一个名为 `__nuitka_version__` 的命名元组（结构序列，共 15 个字段），字段表在 Nuitka 源码 `code_generation/templates/CodeTemplatesConstants.py` 的 `Nuitka_VersionInfoFields` 数组里。两个实用特性（均实测）：
+
+- **拼错立刻报错，不会静默**：属性名写错立即抛 `AttributeError: '__nuitka_version__' object has no attribute 'containing_dirr'`，不存在“拼错了但程序照跑”的静默风险；
+- **运行时自查全集**：`print(sorted(dir(compiled)))` 可列出全部字段（实测 15 个，含上表）；`len(compiled)` 为字段数，还支持索引访问（`compiled[0]` 等价 `compiled.major`）。
+
+官方**没有**发布 `.pyi` 类型存根（PyPI 无官方 stub 包），所以 IDE 不会自动认识它。解法就是上文资源定位模板里的做法：自建一个 `Protocol` 描述 `__compiled__` 的形状，再用 `get_compiled()` 统一获取——之后 `compiled.containing_dir` 有类型提示，拼错字段名 pyright 直接红线。
+
+`get_compiled()` 放在哪个模块都行：`globals()` 查的是**函数定义所在模块**的全局命名空间，而静态导入的模块同样会被 Nuitka 编译、同样有自己的 `__compiled__`（实测跨模块调用正常，pyflakes 零告警）；只有运行时动态加载、未参与编译的 `.py` 里才拿不到。另一个实测细节：`.main` 恒为 `'__main__'`——它报告的是程序主模块，与从哪个模块访问无关。
+
+:::
 
 组合起来的实用写法：
 
 ```python title="环境与模式判断模板"
 import sys
 
-IS_COMPILED = "__compiled__" in globals()
-# 短路求值：源码运行时不会触碰 __compiled__
-IS_ONEFILE = IS_COMPILED and __compiled__.onefile  # noqa: F821
-IS_STANDALONE = IS_COMPILED and __compiled__.standalone  # noqa: F821
+compiled = get_compiled()  # 定义见前文资源定位模板；就地写等价于 globals().get("__compiled__")
+IS_COMPILED = compiled is not None
+IS_ONEFILE = IS_COMPILED and compiled.onefile
+IS_STANDALONE = IS_COMPILED and compiled.standalone
 
 # 需要同时兼容 PyInstaller / Nuitka 的库代码用这个
 IS_FROZEN_ANY = IS_COMPILED or getattr(sys, "frozen", False)
