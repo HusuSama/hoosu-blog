@@ -139,7 +139,7 @@ dalek-cryptography 组织维护的纯 Rust 实现，Rust 生态中 Ed25519 的�
 
 ## 第 0 步（三种语言通用）：生成密钥对
 
-密钥生成**不需要写任何代码**——OpenSSL 1.1.1 起原生支持 Ed25519，两条命令取代每种语言各写一份的 keygen 脚本：
+密钥生成**不需要写任何代码**——OpenSSL 1.1.1 起原生支持 Ed25519，两条命令取代每种语言各写一份的 keygen 脚本。安装、版本差异、参数含义，以及日常证书与签名命令，见 [OpenSSL 日常使用手册](/blog/mon19sbt/)。该手册以社区 OpenSSL 3.5 LTS 为基准；这里的 1.1.1 是生成 Ed25519 密钥的最低版本说明，不代表建议继续使用已结束社区支持的版本：
 
 ```sh title="生成密钥对（每个项目做一次）"
 # 1. 生成私钥（PKCS#8 PEM 文件，妥善保管，永不交付）
@@ -159,14 +159,14 @@ f1e44fdfd3111c18702d39fdeb63a44a015da3567240ecee15e2b588ad4da628
 
 把这串公钥 hex 存好，三种语言的验证代码里都要嵌它。
 
-::: warning macOS 注意：系统自带的 openssl 其实是 LibreSSL
+::: warning macOS 注意：先确认是 OpenSSL 还是 LibreSSL
 
-Apple 出于许可原因，`/usr/bin/openssl` 实际是 **LibreSSL**（OpenSSL 的分支），且版本常年偏旧——实测系统自带的 3.3.6 不支持 Ed25519，会报 `Algorithm ED25519 not found`。不确定自己手里是哪个时，先跑 `openssl version` 看看身份；不支持就 `brew install openssl@3`，然后改用 Homebrew 的路径（如 `/opt/homebrew/opt/openssl@3/bin/openssl`）或把它加到 PATH 前面。
+一些 macOS 版本的 `/usr/bin/openssl` 实际是 **LibreSSL**，它与社区 OpenSSL 的版本号、算法和选项不能直接对应。先跑 `openssl version -a` 确认身份；若生成 Ed25519 时出现 `Algorithm ED25519 not found`，可安装 Homebrew 的 OpenSSL，并把对应目录放到当前终端 PATH 前面：`brew install openssl@3`，随后执行 `export PATH="$(brew --prefix openssl@3)/bin:$PATH"`。这一写法兼容 Apple Silicon 与 Intel 的 Homebrew 前缀；安装得到的具体分支仍需检查，不能把 `openssl@3` 理解为固定的 3.5 LTS。
 
 顺带解释一个常见疑惑：为什么 `openssl --help` 里搜不到 ed25519？因为 `--help` 只列出子命令（genpkey、x509……），而 `ED25519` 是 `genpkey` 的 `-algorithm` 参数值，不是子命令——新算法没有专属命令，都走通用机制。想确认手里的 openssl 支持哪些算法，用这个：
 
-```sh
-openssl list -public-key-algorithms | grep -i ed25519   # 有输出 = 支持
+```sh title="check-ed25519.sh"
+openssl list -public-key-algorithms | grep -i ed25519   # 查看是否列出该算法；生成命令是实际能力检查
 ```
 
 :::
