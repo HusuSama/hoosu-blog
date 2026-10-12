@@ -127,6 +127,51 @@ sudo scoop install python -g   # 全局，需管理员，装到 SCOOP_GLOBAL
 > [!TIP]
 > 个人开发机全部用用户级即可；只有多账户共用的机器才需要全局安装。
 
+### 配置文件（config.json）
+
+Scoop 有唯一的持久化配置文件，优先级和路径由官方核心（`lib/core.ps1`）决定：
+
+```powershell title="config-path.ps1"
+# 设了 XDG_CONFIG_HOME → <XDG>\scoop\config.json
+# 否则（默认）      → ~\.config\scoop\config.json
+
+# 特例：便携安装（根目录下有 config.json）→ <根目录>\config.json
+```
+
+::: warning 前面"环境变量方式"与这份文件的关系
+`scoop config SCOOP xxx` 这类命令写入的就是 `~\.config\scoop\config.json`。读取优先级：**环境变量 `SCOOP` > 配置项 `root_path` > 脚本推断 > `~\scoop`**。环境变量和配置文件同时存在时，环境变量赢。
+
+国内镜像安装脚本（如 scoop-proxy-cn）在你用 `-ScoopDir` 自定义目录时，会自动把该目录写进配置项 `root_path`——这就是"装完没设环境变量也能找回安装目录"的原因。若文件里的 `root_path` 与实际安装位置不一致，且 `$env:SCOOP` 也为空，Scoop 会按脚本推断路径走，这份配置不生效。
+:::
+
+常用配置项速查（完整列表见 `scoop config --help`）：
+
+| 分类 | 配置项 | 作用 |
+| :-- | :-- | :-- |
+| 常用 | `root_path` | Scoop 安装根目录（镜像脚本自动写入） |
+| | `global_path` | 全局软件目录，对应 `SCOOP_GLOBAL` |
+| | `cache_path` | 下载缓存目录，默认根目录下 `cache` |
+| | `scoop_repo` | Scoop 本体的 git 仓库（第三章镜像切源用的就是它） |
+| | `scoop_branch` | `master` / `develop`，提前吃未发布功能 |
+| | `default_architecture` | `64bit` / `32bit` / `arm64` 安装架构偏好 |
+| 行为 | `use_sqlite_cache` | 用 SQLite 缓存加速 `search` / `shim` |
+| | `no_junction` | 不建 `current` 别名，shims 直指具体版本 |
+| | `force_update` | 强制升级到 bucket 版本 |
+| | `ignore_running_processes` | 更新/卸载时忽略正在运行的进程，仅告警 |
+| | `show_manifest` / `show_update_log` / `debug` | 安装前显示清单 / 更新不显示日志 / 详细输出 |
+| 网络 | `proxy` | `[user:pass@]host:port`；`none` 绕过系统代理 |
+| | `gh_token` | GitHub API token，避免 `checkver` 限流 |
+| | `private_hosts` | 私有仓库主机 + 认证头 |
+| aria2 | `aria2-enabled` / `aria2-split` 等 | 分片下载开关及参数（见前文 aria2 提示） |
+| 恶意检查 | `virustotal_api_key` | `scoop virustotal` 扫描用的 API key |
+
+```powershell title="config-usage.ps1"
+scoop config                        # 查看全部配置
+scoop config root_path              # 查看单项
+scoop config proxy 'http://127.0.0.1:7890'   # 设置单项
+scoop config rm proxy               # 删除单项
+```
+
 ## 三、国内镜像加速
 
 Scoop 的痛点：本体、bucket 清单、软件安装包几乎全在 GitHub，国内访问极不稳定。加速分三层：
