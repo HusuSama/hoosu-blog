@@ -10,27 +10,106 @@ permalink: /blog/06842poo/
 
 自动化脚本最常见的死局：某一步要等一个"可能很久、也可能永远不来"的结果——网页跳转、第三方就绪、队列轮转。等吧，时间不可控；把超时调短吧，网络一慢就误判失败。理想的交互是**让用户随时按键接管**：自动等待立即中止，人手工处理，处理完再按一个键，脚本从断点继续。
 
-这篇教程用 Python + asyncio 实现这套"**可跳过的等待 + 人工接管 + 恢复执行**"机制，覆盖 Windows 与 macOS/Linux 两个平台的单键读取差异，最后给出一份实测过的坑位清单。
+这篇教程实现这套"**可跳过的等待 + 人工接管 + 恢复执行**"机制。为了照顾没有终端编程经验的读者，我们先从最简单的同步版本讲起，再进阶到 asyncio 版本，最后给出一份实测过的坑位清单。
 
 [[TOC]]
 
-## 核心思路：等待与取消信号竞速
+## 阅读前的两个基础知识
 
-整个机制只需要三个概念：
+第一次接触"读按键"的开发者，通常卡在两件事上：**终端默认不是按键即达的**，以及**按键到底以什么形式到达程序**。先建立这两个概念，后面的代码就好懂了。
 
-1. **竞速（race）**：把"业务等待"和"取消信号"两个任务丢给 `asyncio.wait(FIRST_COMPLETED)`，谁先完成听谁的。
-2. **取消（cancel）**：取消信号胜出时，取消业务任务，抛出一个**专用异常**（如 `UserSkipError`）。
-3. **恢复点（resume point）**：把"人工处理 + 按键确认 + 状态校验"设计成正常流程分支，捕获专用异常后走进去，出来继续原流程。
+### 终端默认是"行缓冲"的
 
-用专用异常而不是布尔返回值，是因为它天然穿透多层调用栈——上层统一 `except UserSkipError` 转人工，不需要每层函数都改签名。
+在终端里敲字时，你看到的字符不会立刻送给程序——它们先存在终端的缓冲区里，直到你按下回车，程序才一次性收到**一整行**。这叫**规范模式**（canonical mode，也叫 cooked mode）。
 
-::: tip 关键设计：人工接管是流程分支，不是报错退出
-跳过之后的代码路径要**校验业务状态是否已达成**（比如用户手工操作后目标页面是否已打开），达不成就做兜底（自动导航、重试），而不是直接抛异常结束。这样"自动失败 → 人工补位 → 继续执行"才闭环。
+所以 `input()` 永远只能"读完一整行"，做不到"按一个键立刻响应"。要读单键，必须先把终端切出规范模式：
+
+| 平台 | 切法 | 效果 |
+| :-- | :-- | :-- |
+| Windows | 无需切换，`msvcrt` 模块直接从控制台缓冲区读 | 按键即达、无回显 |
+| macOS / Linux | `tty.setcbreak()` 切到 cbreak 模式 | 按键即达、无回显，但保留 Ctrl-C 信号 |
+
+::: warning 用 cbreak，不要用 raw
+`tty.setraw()` 会同时关掉 `ISIG`——Ctrl-C 变成普通字节 `0x03`，**程序杀不掉了**。要保留 Ctrl-C 中断就用 `tty.setcbreak()`。
 :::
 
-## 第一步：竞速等待骨架
+### 按键到达程序时是什么：字符、键码与转义序列
 
-先写跨平台无关的部分。注意 `factory` 用回调延迟创建被等待对象——竞速输掉时要取消它，直接传入协程对象会留下"never awaited"警告。
+程序读到的永远不是"按键"这个抽象概念，而是**字节**。不同终端把这些字节编码成几种不同的方案，了解它们你才能查询、验证和自定义按键：
+
+1. **ASCII / C0 控制字符**：普通可打印字符（字母、数字）就是它们的编码值；控制键是一个字节：Esc 是 `0x1b`，回车是 `0x0d`，空格是 `0x20`，Ctrl-C 是 `0x03`（Ctrl 系列 = 字母值减 0x40，如 Ctrl-X 是 `0x18`）。
+2. **转义序列（escape sequence）**：没有 ASCII 码位的键——方向键、F1–F12、Home/End——由**多个字节**表示，且几乎都以 `0x1b`（Esc）开头。例如在传统的 xterm 编码（俗称 **keycode / termcap 风格**）里：↑ 是 `\x1b[A`、↓ 是 `\x1b[B`、F1 是 `\x1bOP`。
+3. **现代编码方案（Kitty keyboard protocol / CSI-u）**：新一代终端（Kitty、WezTerm、Ghostty 等）支持把每个按键编码成 `CSI unicode-key-code ; modifiers u` 形式的序列，例如 Ctrl-C 是 `\x1b[99;5u`。它解决了"Ctrl+C 和 Ctrl+键 撞码"的老问题，但**默认不开启**——程序要主动发启用序列终端才会切换。本文只读传统编码，不涉及 CSI-u。
+
+::: tip 如何查询和验证一个按键的字节
+- macOS / Linux：在真实终端里执行 `showkey -a`（或 `cat -v`，敲键后回车），会直接打印每个键的字节序列，例如按 ↑ 输出 `^[ [ A`（即 `\x1b[A`）。
+- 也可查终端数据库：`infocmp -1 xterm | grep kup` 能看到 ↑ 键的定义。
+- Windows：`getwch()` 返回值本身就是键码；方向键、功能键先返回 `'\x00'` 或 `'\xe0'` 前缀，第二次调用返回扩展键码。
+- 一切以**实测输出为准**——同一颗 F1 键，不同终端/模式下的字节可能不同，这正是下文代码里"Esc 需要判定窗口"的原因。
+:::
+
+本文统一使用 **Esc 键**做"跳过"信号：它语义上就是"中止/退出"，Windows 上 `getwch` 对它返回单个 `'\x1b'` 无歧义；Unix 上虽然与转义序列共享首字节，但可以用 50ms 判定窗口区分（见后文坑位清单）。
+
+## 版本一：同步（非 asyncio）实现
+
+不是所有脚本都用 asyncio。同步版结构更简单，核心思路是：**在业务循环里轮询键盘**，一旦发现 Esc 就跳出自动等待，进入人工处理，回车后继续。
+
+```python title="sync_demo.py"
+import sys
+import time
+
+
+def wait_or_skip(check, description: str, poll: float = 0.5, max_wait: float = 120.0):
+    """轮询 check() 直到为 True；期间按 Esc 立即中止并抛 UserSkipError。"""
+    reader = KeyReader()          # 下文实现的跨平台单键读取器
+    with reader.listening():
+        deadline = time.monotonic() + max_wait
+        while time.monotonic() < deadline:
+            if check():
+                return            # 自动等待成功
+            if reader.pressed_escape():
+                raise UserSkipError(description)
+            time.sleep(poll)
+    raise TimeoutError(description)
+
+
+def manual_fallback(reason: str, verify) -> bool:
+    """人工接管：提示 → 等回车 → 校验状态。"""
+    input(f"{reason}，请手动完成操作后按回车继续：")
+    if verify():
+        return True
+    print("未达预期状态，执行兜底逻辑……")
+    return False
+
+
+class UserSkipError(RuntimeError):
+    """用户按键主动跳过自动等待。"""
+
+
+if __name__ == "__main__":
+    started = time.monotonic()
+    try:
+        # 业务条件：60 秒后"就绪"。等不及就按 Esc。
+        wait_or_skip(
+            check=lambda: time.monotonic() - started > 60,
+            description="等待资源就绪（按 Esc 转人工）",
+        )
+        print("自动等待完成")
+    except UserSkipError as e:
+        print(f"已跳过：{e}")
+        manual_fallback("人工处理", verify=lambda: True)
+    print("脚本继续执行后续步骤……")
+```
+
+同步版的要点：
+
+- 用**专用异常** `UserSkipError` 而不是布尔返回值——它天然穿透多层调用栈，上层统一 `except UserSkipError` 转人工，不需要每层函数都改签名。
+- 跳过之后的代码路径要**校验业务状态是否已达成**，达不成就做兜底（自动导航、重试），而不是直接报错退出。这样"自动失败 → 人工补位 → 继续执行"才闭环。
+- 用 `with reader.listening():` 保证任何路径退出都恢复终端状态（Unix 上尤其关键）。
+
+## 版本二：asyncio 实现——等待与取消信号竞速
+
+轮询适合同步脚本，但 asyncio 下更优雅的做法是**竞速（race）**：把"业务等待"和"按键信号"两个任务交给 `asyncio.wait(FIRST_COMPLETED)`，谁先完成听谁的。按键胜出时取消业务任务，抛出 `UserSkipError`，捕获后走进"人工处理 + 确认 + 校验"分支，出来继续原流程。
 
 ```python title="skip_or_wait.py"
 import asyncio
@@ -68,7 +147,7 @@ async def skip_or_wait[T](
     return await run()
 ```
 
-外层只需要在业务异常和跳过异常上分别处理：
+调用方：
 
 ```python title="usage.py"
 skip = asyncio.Event()
@@ -88,9 +167,9 @@ async def do_step():
 
 业务等待自身的超时/异常会从 `task.result()` 原样抛出，与跳过互不干扰。
 
-## 第二步：读取单键——两个平台两种做法
+## 读取单键：两个平台两种做法
 
-竞速的另一半是"按键把 `skip` 置位"。终端默认处于**规范模式**（行缓冲）：按一个键不会送达程序，直到回车。所以要读单键必须切模式，而 Windows 和 Unix 的切法完全不同。
+竞速的另一半是"按键把 `skip` 置位"，也就是本文开头说的"切终端模式读单键"。
 
 :::: tabs#platform
 
@@ -190,9 +269,7 @@ class EscapeWatcher:
 
 ::::
 
-为什么选 Esc 而不是字母键：Esc 语义上就是"中止/退出"，且 Windows 上 `getwch` 对它返回单个 `'\x1b'`，无歧义、无前缀，是唯一两个平台都好读的"意图明确"按键。
-
-## 第三步：把监听封装成随进随退的上下文
+## 把监听封装成随进随退的上下文
 
 监听只在等待期间开启，退出必须恢复终端。用异步上下文管理器收口，并处理"非交互终端"的退化：
 
@@ -230,7 +307,7 @@ async def watch_escape(on_skip):
         watcher.stop()
 ```
 
-组合进第一步的骨架：
+组合进竞速骨架：
 
 ```python title="flow.py"
 async def skip_or_wait(factory, description, *, timeout=None):
@@ -243,7 +320,7 @@ async def skip_or_wait(factory, description, *, timeout=None):
     return await asyncio.wait_for(run(), timeout)
 ```
 
-## 第四步：人工接管与恢复执行
+## 人工接管与恢复执行
 
 跳过之后是这套机制的另一半——**恢复**。标准三段式：
 
@@ -265,16 +342,167 @@ async def manual_fallback(page, reason: str) -> None:
 人工操作期间双手可能不在键盘上，回车是终端里最不含糊的确认键；且此时已退出单键监听，`input()` 的行编辑、退格、粘贴都正常工作。一个键负责"中止自动"，另一个键负责"确认恢复"，职责分离。
 :::
 
+## 可复现的完整演示脚本
+
+上面是分模块讲解，这里给一份**单文件、零依赖、可直接运行**的 asyncio 演示脚本。业务等待用 `asyncio.sleep(60)` 模拟"可能很久的结果"，让你在没有真实业务的情况下完整体验"Esc 转人工 → 回车恢复"的闭环。
+
+```python title="demo.py"
+"""可跳过的等待演示：python demo.py
+
+- 按 Esc：跳过自动等待，进入人工接管提示
+- 按回车：确认人工处理完成，脚本从断点继续
+"""
+import asyncio
+import sys
+import time
+
+if sys.platform == "win32":
+    import msvcrt
+
+    ESCAPE = "\x1b"
+
+    class KeyWatcher:
+        """Windows：msvcrt 轮询版。"""
+
+        def __init__(self, on_skip):
+            self.on_skip = on_skip
+            self.task = None
+
+        async def __aenter__(self):
+            self.task = asyncio.create_task(self._poll())
+            return self
+
+        async def __aexit__(self, *exc):
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+
+        async def _poll(self):
+            while True:
+                while msvcrt.kbhit():
+                    key = msvcrt.getwch()
+                    if key in ("\x00", "\xe0"):
+                        if msvcrt.kbhit():
+                            msvcrt.getwch()  # 消费扩展键码
+                        continue
+                    if key == "\x03":
+                        raise KeyboardInterrupt
+                    if key == ESCAPE:
+                        self.on_skip()
+                        return
+                await asyncio.sleep(0.05)
+else:
+    import os
+    import termios
+    import tty
+
+    GRACE = 0.05
+
+    class KeyWatcher:
+        """Unix：termios cbreak + add_reader 版。"""
+
+        def __init__(self, on_skip):
+            self.on_skip = on_skip
+            self.fd = sys.stdin.fileno()
+            self.saved = termios.tcgetattr(self.fd)
+            self.buffer = b""
+            self.timer = None
+            self.loop = None
+
+        async def __aenter__(self):
+            self.loop = asyncio.get_running_loop()
+            if sys.stdin.isatty():
+                tty.setcbreak(self.fd)
+                self.loop.add_reader(self.fd, self._on_readable)
+            return self
+
+        async def __aexit__(self, *exc):
+            if not sys.stdin.isatty():
+                return
+            if self.timer is not None:
+                self.timer.cancel()
+            self.loop.remove_reader(self.fd)
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+            termios.tcflush(self.fd, termios.TCIFLUSH)
+
+        def _on_readable(self):
+            chunk = os.read(self.fd, 32)
+            if not chunk:
+                return
+            if self.timer is not None:
+                self.buffer += chunk
+                return
+            if not chunk.startswith(b"\x1b"):
+                return
+            self.buffer = chunk
+            if len(chunk) == 1:
+                self.timer = self.loop.call_later(GRACE, self._settle)
+            else:
+                self.buffer = b""
+
+        def _settle(self):
+            self.timer = None
+            if self.buffer == b"\x1b":
+                self.on_skip()
+            self.buffer = b""
+
+
+class UserSkipError(RuntimeError):
+    """用户按键主动跳过自动等待。"""
+
+
+async def skip_or_wait(coro, description: str):
+    skip = asyncio.Event()
+    async with KeyWatcher(skip.set):
+        task = asyncio.ensure_future(coro)
+        skip_task = asyncio.create_task(skip.wait())
+        try:
+            await asyncio.wait({task, skip_task},
+                               return_when=asyncio.FIRST_COMPLETED)
+            if task.done() and not task.cancelled():
+                return task.result()
+            raise UserSkipError(description)
+        finally:
+            skip_task.cancel()
+            if not task.done():
+                task.cancel()
+
+
+async def main():
+    print("开始自动等待（最长 60 秒），按 Esc 转人工……")
+    try:
+        await skip_or_wait(asyncio.sleep(60), "等待资源就绪")
+        print("自动等待完成")
+    except UserSkipError:
+        print("已跳过自动等待，转人工。")
+        await asyncio.to_thread(
+            input, "请手动完成操作后按回车继续："
+        )
+        print("人工处理确认，从断点继续。")
+    print("脚本继续执行后续步骤……")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+运行方式与预期效果：
+
+```sh
+python demo.py
+# 输出"开始自动等待……"后按 Esc → 立即打印"已跳过自动等待，转人工。"
+# 手动做点事，按回车 → 打印"从断点继续"并走完后续流程
+# 什么都不按 → 60 秒后正常完成
+```
+
 ## 坑位清单
 
 以下是实际实现中会逐一撞上的坑，按"一定会遇到"到"环境相关"排序。
 
 ::: warning 终端模式恢复必须在 finally 里
 cbreak 模式下如果异常退出没恢复，用户会面对一个**无回显、行编辑失效**的"坏终端"。Unix 上的急救命令是 `stty sane`。预防只有一条：`tcgetattr` 快照放进入时，`tcsetattr` 恢复放 `finally`，任何路径都不例外。
-:::
-
-::: warning setraw 与 setcbreak 的选择
-`tty.setraw()` 会同时关掉 `ISIG`——Ctrl-C 变成普通字节 `0x03`，**程序杀不掉了**。要保留 Ctrl-C 中断就用 `tty.setcbreak()`。
 :::
 
 :::: details Windows：getch 家族的三个暗礁
@@ -316,7 +544,7 @@ Esc 键发送 `\x1b`，而方向键发送 `\x1b[A`、F1 发送 `\x1bOP`——首
 如果多个协程同时处于"可跳过等待"，一个全局按键监听就语义不明了：按 Esc 是跳过谁？两个方案：**串行化**可跳过等待（同一时刻只有一个监听者），或维护"当前激活等待"注册表把按键路由给它。前者简单，够用就别上后者。
 :::
 
-## 第五步：测试——用伪终端注入按键
+## 测试：用伪终端注入按键
 
 单键监听没法在普通单测里触发（pytest 的 stdin 不是 tty），macOS/Linux 上用 `pty` 造一个：父进程持有 master 端往里写字节，子进程的 stdin/stdout 挂在 slave 端，就是一个真终端。
 
@@ -360,4 +588,4 @@ def run_in_pty(args, feed: bytes | None, budget: float) -> bytes:
 | 终端恢复 | 无需切换，自然恢复 | `tcsetattr` + `tcflush` 放 `finally` |
 | 非 tty | `isatty()` 守卫，退化为普通等待 | 同左 |
 
-机制本身只有一句话：**竞速 + 取消 + 专用异常 + 恢复分支**。真正的工作量在终端细节和退出路径的完整性上——把上面清单里的坑逐条对过，这套交互在任何控制台程序里都是可复用的。
+机制本身只有一句话：**竞速（或轮询）+ 取消 + 专用异常 + 恢复分支**。真正的工作量在终端细节和退出路径的完整性上——把上面清单里的坑逐条对过，这套交互在任何控制台程序里都是可复用的。
