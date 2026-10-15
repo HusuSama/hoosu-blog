@@ -309,14 +309,16 @@ async def watch_escape(on_skip):
         watcher.stop()
 ```
 
-组合进竞速骨架：
+组合进竞速骨架。`watch_escape` 传给 `yield` 的值就是 `async with ... as` 的目标：`True` 表示监听已激活，`False` 表示非 tty 已退化——后者根本没有按键可等，直接普通等待：
 
 ```python title="flow.py"
 async def skip_or_wait(factory, description, *, timeout=None):
     skip = asyncio.Event()
 
     async def run():
-        async with watch_escape(skip.set):
+        async with watch_escape(skip.set) as listening:
+            if not listening:  # 非 tty：退化为普通等待
+                return await factory()
             return await _race(factory(), skip, description)
 
     return await asyncio.wait_for(run(), timeout)
@@ -517,6 +519,195 @@ python demo.py
 # 手动做点事，按回车 → 打印"从断点继续"并走完后续流程
 # 什么都不按 → 60 秒后正常完成
 ```
+
+## 换用第三方库：prompt_toolkit 与 Textual
+
+前文手写的终端层——cbreak 切换与恢复、转义序列判定、双平台分支——都是成熟轮子。能接受第三方依赖的话，有两个定位不同的选择，均为 MIT 协议、维护活跃（截至本文：prompt_toolkit 3.0.53，约 10.6k★；Textual 8.2.8，约 37.5k★。两者同源：prompt_toolkit 的作者 Jonathan Slenders 也是 Textual 的创造者）。零依赖是硬约束时，继续用前文手写版。
+
+### prompt_toolkit：把"读单键"整个交出去
+
+`pip install prompt_toolkit`。它是 ptpython、IPython 交互壳的底层库，输入层逐项对应我们手写的部分：
+
+| 手写版（前文）                                        | prompt_toolkit                                        |
+| :---------------------------------------------------- | :--------------------------------------------------- |
+| `tcgetattr` 快照 + `setcbreak` + `tcsetattr` 恢复     | `with inp.raw_mode():`，一个上下文管理器包办         |
+| `loop.add_reader(fd, ...)`                            | `with inp.attach(cb):`，内部同样注册事件循环监听     |
+| 手写 `\x1b` 判定窗口与转义序列拼接                    | 内建 VT100 解析器，产出 `Keys.Escape`、`Keys.Up` 等  |
+| `keys_windows.py` + `keys_posix.py` 两套实现          | `create_input()` 按平台自动选择，代码合一            |
+
+demo.py 换用后，`watch.py` 加两份平台实现收敛成一份 20 行的 `watch_escape`：
+
+```python title="demo_pt.py"
+"""可跳过的等待（prompt_toolkit 版）：python demo_pt.py
+
+- 按 Esc：跳过自动等待，进入人工接管提示
+- 按回车：确认人工处理完成，脚本从断点继续
+"""
+import asyncio
+import sys
+from contextlib import asynccontextmanager
+
+from prompt_toolkit.input import create_input
+from prompt_toolkit.keys import Keys
+
+GRACE = 0.05  # Esc 与转义序列的判定窗口（秒）
+
+
+class UserSkipError(RuntimeError):
+    """用户按键主动跳过自动等待。"""
+
+
+@asynccontextmanager
+async def watch_escape(on_skip):
+    # 管道/CI 里 stdin 不是 tty，直接禁用监听
+    if not sys.stdin.isatty():
+        yield False
+        return
+
+    loop = asyncio.get_running_loop()
+    inp = create_input()  # 按平台自动选择 Vt100 / Win32 实现，跨平台代码合一
+    flush_handle = None
+
+    def handle(keys):
+        for kp in keys:
+            if kp.key == Keys.Escape:  # 独立 Esc 已由解析器判定
+                on_skip()
+            elif kp.key == Keys.ControlC:
+                # raw_mode 清掉了 ISIG，Ctrl-C 不再产生信号，手动补发
+                raise KeyboardInterrupt
+
+    def on_readable():
+        nonlocal flush_handle
+        handle(inp.read_keys())  # 读字节 + 解析转义序列，得到结构化按键
+        if flush_handle is not None:
+            flush_handle.cancel()
+        # 与 Application 相同的窗口模式：窗口内无后续字节才算独立 Esc
+        flush_handle = loop.call_later(GRACE, lambda: handle(inp.flush_keys()))
+
+    with inp.raw_mode(), inp.attach(on_readable):
+        try:
+            yield True
+        finally:
+            if flush_handle is not None:
+                flush_handle.cancel()
+
+
+async def skip_or_wait(coro, description: str):
+    skip = asyncio.Event()
+    # yield 值 = 监听是否真的启动：False（非 tty）时不可能有按键到达，
+    # 不进竞速，直接普通等待
+    async with watch_escape(skip.set) as listening:
+        if not listening:
+            return await coro
+        task = asyncio.ensure_future(coro)
+        skip_task = asyncio.create_task(skip.wait())
+        try:
+            await asyncio.wait({task, skip_task},
+                               return_when=asyncio.FIRST_COMPLETED)
+            if task.done() and not task.cancelled():
+                return task.result()
+            raise UserSkipError(description)
+        finally:
+            skip_task.cancel()
+            if not task.done():
+                task.cancel()
+
+
+async def main():
+    print("开始自动等待（最长 60 秒），按 Esc 转人工……")
+    try:
+        await skip_or_wait(asyncio.sleep(60), "等待资源就绪")
+        print("自动等待完成")
+    except UserSkipError:
+        print("已跳过自动等待，转人工。")
+        await asyncio.to_thread(
+            input, "请手动完成操作后按回车继续："
+        )
+        print("人工处理确认，从断点继续。")
+    print("脚本继续执行后续步骤……")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+与 demo.py 的差异只剩两处：`watch_escape` 的实现（收益所在），以及 `skip_or_wait` 用 `as listening` 消费了它的 yield 值——非 tty 时直接 `return await coro`，退化路径从 demo.py 的"内部静默"变成显式分支。上文 pty 用例对 demo_pt.py 全部实测通过——Esc 触发跳过、`\x1b[A` 不触发、Ctrl-C 中断、监听期 ECHO 关闭且退出后恢复、Esc → 回车闭环、stdin 接管道时正常退化为普通等待。但有三件事库**不**替你做，仍要自己处理：
+
+:::: warning prompt_toolkit 仍需自己处理的三件事
+1. **独立 Esc 的判定窗口要自己排**。`read_keys()` 只解析"本次读到的字节"，尾部孤立的 `\x1b` 会留在解析器里等后续字节——它可能是方向键序列的首字节。prompt_toolkit 自家的 Application 是在每次输入后起一个 0.5 秒定时器（`ttimeoutlen`）再 `flush_keys()` 冲出悬置按键；demo 里沿用前文的 50ms 窗口做同一件事。
+2. **Ctrl-C 要自己补发**。`raw_mode()` 是完整 raw：源码里 `_patch_lflag` 清掉了 `ISIG`，`\x03` 以普通按键身份到达回调。不处理它，等待期间用户就失去了中断能力——在回调里把 `Keys.ControlC` 转成 `KeyboardInterrupt`。
+3. **`isatty()` 守卫与残余按键照旧**。非 tty 的退化逻辑仍在 `watch_escape` 入口；Unix 下退出后想清掉"已敲未读"的按键，保留前文那行 `termios.tcflush` 即可。
+::::
+
+### Textual：当"人工接管"值得一块屏幕
+
+`pip install textual`。Textual 不是"简化按键监听"，而是把整个流程装进 TUI：按键绑定、任务取消、退出时恢复终端，全部由框架管理，`termios`/`msvcrt` 一行都不用写。代价是应用接管整块屏幕（备用屏幕、鼠标模式），形态从"往普通输出里穿插提示的脚本"变成"界面应用"——好在 `App.run()` 返回后，普通脚本流程照常继续。
+
+```python title="demo_textual.py"
+"""可跳过的等待（Textual 版）：python demo_textual.py
+
+- 自动等待期间按 Esc：中止自动等待，转人工
+- 手动处理完成后按回车：从断点继续，随后退出应用
+"""
+import asyncio
+
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.widgets import Footer, Header, Static
+
+
+class SkippableWaitApp(App[None]):
+    TITLE = "可跳过的等待"
+    CSS = "#status { padding: 1 2; }"
+    BINDINGS = [Binding("escape", "skip", "转人工（跳过自动等待）")]
+
+    def __init__(self, wait: float = 60.0) -> None:
+        super().__init__()
+        self.wait = wait
+        self.skipped = False
+        self.worker = None
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(f"自动等待中（最长 {self.wait:.0f} 秒）……", id="status")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.worker = self.run_worker(self.auto_wait, exclusive=True)
+
+    def status(self, text: str) -> None:
+        self.query_one("#status", Static).update(text)
+
+    async def auto_wait(self) -> None:
+        await asyncio.sleep(self.wait)  # 业务等待：网页跳转、轮询……
+        self.status("自动等待完成")
+        await asyncio.sleep(1.0)  # 展示片刻再退出
+        self.exit()
+
+    def action_skip(self) -> None:
+        self.worker.cancel()  # 取消正在运行的业务等待
+        self.skipped = True
+        self.status("已转人工：请在目标窗口手动完成操作，处理后按回车继续")
+
+    def on_key(self, event) -> None:
+        if self.skipped and event.key == "enter":
+            self.status("人工确认完成，从断点继续……")
+            self.set_timer(0.5, self.exit)
+
+
+if __name__ == "__main__":
+    SkippableWaitApp().run()
+    print("脚本继续执行后续步骤……")
+```
+
+要点：
+
+- **声明式绑定**：`BINDINGS` 把 `escape` 映射到 `action_skip`，Footer 自动展示快捷键提示；Esc 与转义序列的歧义、平台差异都在框架内部解决。
+- **可取消的业务等待**：`run_worker()` 把业务等待交给框架的任务管理，`worker.cancel()` 就是前文"竞速 + 取消"的全部。
+- **恢复即退出**：人工确认后 `self.exit()`，终端恢复由框架负责——这正是坑位清单里"退出路径完整性"问题的框架化答案。
+- **测试不再需要 pty**：`async with app.run_test() as pilot:` 里 `await pilot.press("escape")` 即可 headless 驱动按键，跨平台；本文的转人工、恢复、自然完成三条路径均以此实测。
+
+选型一句话：往现有脚本里嵌一个"按 Esc 转人工"，选 prompt_toolkit；交互本身要长成界面（多步人工接管、实时日志），选 Textual。
 
 ## 坑位清单
 
