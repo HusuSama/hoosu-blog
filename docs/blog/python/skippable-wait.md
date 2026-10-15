@@ -24,10 +24,10 @@ permalink: /blog/06842poo/
 
 所以 `input()` 永远只能"读完一整行"，做不到"按一个键立刻响应"。要读单键，必须先把终端切出规范模式：
 
-| 平台 | 切法 | 效果 |
-| :-- | :-- | :-- |
-| Windows | 无需切换，`msvcrt` 模块直接从控制台缓冲区读 | 按键即达、无回显 |
-| macOS / Linux | `tty.setcbreak()` 切到 cbreak 模式 | 按键即达、无回显，但保留 Ctrl-C 信号 |
+| 平台          | 切法                                        | 效果                                 |
+| :------------ | :------------------------------------------ | :----------------------------------- |
+| Windows       | 无需切换，`msvcrt` 模块直接从控制台缓冲区读 | 按键即达、无回显                     |
+| macOS / Linux | `tty.setcbreak()` 切到 cbreak 模式          | 按键即达、无回显，但保留 Ctrl-C 信号 |
 
 ::: warning 用 cbreak，不要用 raw
 `tty.setraw()` 会同时关掉 `ISIG`——Ctrl-C 变成普通字节 `0x03`，**程序杀不掉了**。要保留 Ctrl-C 中断就用 `tty.setcbreak()`。
@@ -42,6 +42,8 @@ permalink: /blog/06842poo/
 3. **现代编码方案（Kitty keyboard protocol / CSI-u）**：新一代终端（Kitty、WezTerm、Ghostty 等）支持把每个按键编码成 `CSI unicode-key-code ; modifiers u` 形式的序列，例如 Ctrl-C 是 `\x1b[99;5u`。它解决了"Ctrl+C 和 Ctrl+键 撞码"的老问题，但**默认不开启**——程序要主动发启用序列终端才会切换。本文只读传统编码，不涉及 CSI-u。
 
 ::: tip 如何查询和验证一个按键的字节
+你还可以参照[菜鸟教程的ASCII表](https://www.runoob.com/w3cnote/ascii.html)，比如 `Esc` 十六进制是 `1B` ，那么就是 `0x1b`
+
 - macOS / Linux：在真实终端里执行 `showkey -a`（或 `cat -v`，敲键后回车），会直接打印每个键的字节序列，例如按 ↑ 输出 `^[ [ A`（即 `\x1b[A`）。
 - 也可查终端数据库：`infocmp -1 xterm | grep kup` 能看到 ↑ 键的定义。
 - Windows：`getwch()` 返回值本身就是键码；方向键、功能键先返回 `'\x00'` 或 `'\xe0'` 前缀，第二次调用返回扩展键码。
@@ -398,33 +400,46 @@ else:
     import termios
     import tty
 
-    GRACE = 0.05
+    GRACE = 0.05  # Esc 与转义序列的判定窗口（秒）
 
     class KeyWatcher:
         """Unix：termios cbreak + add_reader 版。"""
 
         def __init__(self, on_skip):
             self.on_skip = on_skip
+            # 取 stdin 的底层文件描述符（整数 fd，POSIX 下 stdin 恒为 0）：
+            # termios / os.read / add_reader 是底层 API，只认 fd，不认 sys.stdin 流对象
             self.fd = sys.stdin.fileno()
+            # 快照当前终端属性，退出监听时据此恢复（cbreak 会修改终端模式）；
+            # 注意：非 tty（管道/CI）下裸调会抛 termios.error，见文末坑位清单
             self.saved = termios.tcgetattr(self.fd)
             self.buffer = b""
+            # Esc 判定窗口定时器；非 None 表示正处于"等待后续字节"的窗口期
             self.timer = None
             self.loop = None
 
         async def __aenter__(self):
+            # 协程内取运行中事件循环的标准 API；get_event_loop() 依赖弃用中的
+            # 线程级"当前循环"状态，行为随版本变化，勿用
             self.loop = asyncio.get_running_loop()
             if sys.stdin.isatty():
                 tty.setcbreak(self.fd)
+                # 注册 stdin 可读回调：按键字节一到，事件循环立即调用 _on_readable
                 self.loop.add_reader(self.fd, self._on_readable)
             return self
 
+        # 退出监听（任何路径，含异常）：取消未触发的定时器、注销 stdin 监听、
+        # 恢复终端模式并清空残余按键，保证终端回到可用状态
         async def __aexit__(self, *exc):
             if not sys.stdin.isatty():
                 return
             if self.timer is not None:
                 self.timer.cancel()
             self.loop.remove_reader(self.fd)
+            # 恢复进入 cbreak 前快照的终端属性（回到行缓冲 + 回显），
+            # 否则退出后终端无回显、行编辑失效；TCSADRAIN = 先排空输出再生效
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+            # 清空输入队列中"已敲未读"的按键字节，防止被后续 input() 误读
             termios.tcflush(self.fd, termios.TCIFLUSH)
 
         def _on_readable(self):
@@ -434,14 +449,20 @@ else:
             if self.timer is not None:
                 self.buffer += chunk
                 return
+            # \x1b 是 Esc 的字节值；方向键等功能键的转义序列（如 \x1b[A）同样以它开头
             if not chunk.startswith(b"\x1b"):
                 return
             self.buffer = chunk
+            # 只读到 1 个字节 → 裸 Esc；多个字节 → 一次读全的转义序列（方向键等）
             if len(chunk) == 1:
+                # 裸 \x1b 也可能是转义序列的首字节：延迟 GRACE 秒观察有无后续字节，
+                # 到期由 _settle 裁决是否独立 Esc 键
                 self.timer = self.loop.call_later(GRACE, self._settle)
             else:
                 self.buffer = b""
 
+        # 判定窗口到期的裁决：缓冲区里仍只剩 \x1b → 独立 Esc 键，触发跳过；
+        # 否则窗口期内拼到了后续字节 → 是转义序列，清空放弃
         def _settle(self):
             self.timer = None
             if self.buffer == b"\x1b":
@@ -531,9 +552,14 @@ Esc 键发送 `\x1b`，而方向键发送 `\x1b[A`、F1 发送 `\x1bOP`——首
 `asyncio.wait({coro1(), coro2()})` 直接传协程在 Python 3.11+ 已移除，必须先 `create_task`。被取消的任务若以异常结束且从未 `await`，还会触发 "Task exception was never retrieved" 警告——竞速输掉的一方取消后 `await` 一次并吞掉 `CancelledError` 最稳妥。
 :::
 
+::: warning 手写上下文管理器：**aenter** 别漏 async
+把监听封装成类（而不是用 `@asynccontextmanager`）时，`__aenter__`/`__aexit__` 必须写成 `async def`。漏掉 `async` 会在 `async with` 处抛出 `TypeError: 'async with' received an object from __aenter__ that does not implement __await__`，且紧跟一条极具误导性的 `RuntimeWarning: coroutine 'sleep' was never awaited`——警告指向作为参数传入的协程，病根却在上下文管理器：异常发生在 `ensure_future(coro)` 之前，调用点创建的协程对象自然无人接手。几十行代码里漏一个关键字，肉眼极难发现；定位时看 TypeError 的行号（`async with` 那一行），别被 RuntimeWarning 带偏。
+:::
+
 :::: details 非交互环境与打包
 
 - **stdin 非 tty**：管道（`python app.py < data`）、CI、部分 IDE 的运行面板里 `isatty()` 为 `False`。不守卫就崩溃或永远收不到键，**必须退化成普通等待**。
+  上文 demo.py 为保持单文件简单，`__init__` 里裸调了 `tcgetattr`，非 tty 下会直接抛 `termios.error`；正式代码请按 watch.py 的结构先 `isatty()` 再构造 watcher（或退一层，在 `skip_or_wait` 入口对非 tty 直接 `return await coro`）。
 - **GUI 子系统打包**：PyInstaller `--windowed` / Nuitka `--windows-disable-console` 产物没有控制台，一切终端 API 无从谈起。需要本功能就保持 console 子系统。
 - **Windows Terminal / ConPTY**：转译输入但保留 legacy 键码语义（Esc 仍是 `0x1b`，方向键仍是前缀+码），行为与 conhost 一致，无需适配。
 - **WSL / mintty**：走的是 Linux 路径，`termios` 有效，但 mintty 默认未开启转义序列直通时部分功能键可能读不全。
@@ -580,12 +606,12 @@ def run_in_pty(args, feed: bytes | None, budget: float) -> bytes:
 
 ## 小结
 
-| 环节 | Windows | macOS / Linux |
-| :-- | :-- | :-- |
-| 单键读取 | `msvcrt.kbhit/getwch` 轮询 | `termios` cbreak + `loop.add_reader` |
-| Esc 键值 | `'\x1b'` 单字节，无歧义 | 与转义序列共首字节，50ms 窗口判定 |
-| Ctrl-C | `getwch` 返回 `'\x03'`，手动补发 `KeyboardInterrupt` | cbreak 保留 `ISIG`，信号照常 |
-| 终端恢复 | 无需切换，自然恢复 | `tcsetattr` + `tcflush` 放 `finally` |
-| 非 tty | `isatty()` 守卫，退化为普通等待 | 同左 |
+| 环节     | Windows                                              | macOS / Linux                        |
+| :------- | :--------------------------------------------------- | :----------------------------------- |
+| 单键读取 | `msvcrt.kbhit/getwch` 轮询                           | `termios` cbreak + `loop.add_reader` |
+| Esc 键值 | `'\x1b'` 单字节，无歧义                              | 与转义序列共首字节，50ms 窗口判定    |
+| Ctrl-C   | `getwch` 返回 `'\x03'`，手动补发 `KeyboardInterrupt` | cbreak 保留 `ISIG`，信号照常         |
+| 终端恢复 | 无需切换，自然恢复                                   | `tcsetattr` + `tcflush` 放 `finally` |
+| 非 tty   | `isatty()` 守卫，退化为普通等待                      | 同左                                 |
 
 机制本身只有一句话：**竞速（或轮询）+ 取消 + 专用异常 + 恢复分支**。真正的工作量在终端细节和退出路径的完整性上——把上面清单里的坑逐条对过，这套交互在任何控制台程序里都是可复用的。
