@@ -535,7 +535,24 @@ python demo.py
 | 手写 `\x1b` 判定窗口与转义序列拼接                    | 内建 VT100 解析器，产出 `Keys.Escape`、`Keys.Up` 等  |
 | `keys_windows.py` + `keys_posix.py` 两套实现          | `create_input()` 按平台自动选择，代码合一            |
 
-demo.py 换用后，`watch.py` 加两份平台实现收敛成一份 20 行的 `watch_escape`：
+#### `raw_mode()` 与 `attach()` 各做了什么
+
+两个上下文管理器是这份实现的地基。`raw_mode()` 做的就是前文 `tcgetattr` 快照 → 改终端属性 → 退出恢复那套，只是收进了一个上下文管理器；它清掉的标志位（源码 `_patch_lflag`/`_patch_iflag`）逐个对应一种终端默认行为：
+
+| 清除的标志                  | 关掉的默认行为                     | 对我们的意义               |
+| :-------------------------- | :--------------------------------- | :------------------------- |
+| `ICANON`                    | 行缓冲，攒够一行才让程序读到        | 按键即达，不用等回车        |
+| `ECHO`                      | 终端回显                           | 显示由程序自己控制          |
+| `ISIG`                      | Ctrl-C 触发 SIGINT 杀进程          | `\x03` 变普通按键，需手动补发 |
+| `IEXTEN`                    | 终端扩展行编辑（如 Ctrl-V 字面量）  | 按键原样上交                |
+| `IXON` / `IXOFF`            | Ctrl-S/Q 流控                      | 不吞按键                    |
+| `ICRNL` / `INLCR` / `IGNCR` | 回车/换行互转                      | 字节不翻译，交给解析器      |
+
+外加 `VMIN=1`（有一个字节就返回）、退出时按快照恢复、非 tty 下 `tcgetattr` 报错则整体跳过。注意它比前文 `setcbreak` 更激进：`setcbreak` 保留 `ISIG`，而 `raw_mode()` 是"完整 raw"——这就是 Ctrl-C 必须自己补发的根源。
+
+`attach(cb)` 是手写版 `loop.add_reader(fd, ...)` 的上下文管理器封装：进入时把 stdin 的 fd 挂到当前事件循环、可读就调 `cb`；退出时 `remove_reader` 并恢复上一层挂的回调。它还替你处理了一个边界——stdin 被关掉（比如接 `/dev/null`）时自动摘除 reader，避免回调被无限触发成忙循环。
+
+demo.py 换用后，`watch.py` 加两份平台实现收敛成一个上下文管理器 `handle_escape`：
 
 ```python title="demo_pt.py"
 """可跳过的等待（prompt_toolkit 版）：python demo_pt.py
@@ -545,44 +562,38 @@ demo.py 换用后，`watch.py` 加两份平台实现收敛成一份 20 行的 `w
 """
 import asyncio
 import sys
+from collections.abc import Coroutine
 from contextlib import asynccontextmanager
+from typing import Any
 
 from prompt_toolkit.input import create_input
+from prompt_toolkit.key_binding import KeyPress
 from prompt_toolkit.keys import Keys
-
-GRACE = 0.05  # Esc 与转义序列的判定窗口（秒）
-
-
-class UserSkipError(RuntimeError):
-    """用户按键主动跳过自动等待。"""
 
 
 @asynccontextmanager
-async def watch_escape(on_skip):
-    # 管道/CI 里 stdin 不是 tty，直接禁用监听
+async def handle_escape(on_skip):
+    # 非 tty 不处理
     if not sys.stdin.isatty():
         yield False
         return
-
     loop = asyncio.get_running_loop()
-    inp = create_input()  # 按平台自动选择 Vt100 / Win32 实现，跨平台代码合一
-    flush_handle = None
+    inp = create_input()
+    flush_handle: asyncio.TimerHandle | None = None
 
-    def handle(keys):
+    def handle(keys: list[KeyPress]):
         for kp in keys:
-            if kp.key == Keys.Escape:  # 独立 Esc 已由解析器判定
+            if kp.key == Keys.Escape:
                 on_skip()
             elif kp.key == Keys.ControlC:
-                # raw_mode 清掉了 ISIG，Ctrl-C 不再产生信号，手动补发
                 raise KeyboardInterrupt
 
     def on_readable():
         nonlocal flush_handle
-        handle(inp.read_keys())  # 读字节 + 解析转义序列，得到结构化按键
+        handle(inp.read_keys())
         if flush_handle is not None:
             flush_handle.cancel()
-        # 与 Application 相同的窗口模式：窗口内无后续字节才算独立 Esc
-        flush_handle = loop.call_later(GRACE, lambda: handle(inp.flush_keys()))
+        flush_handle = loop.call_later(0.05, lambda: handle(inp.flush_keys()))
 
     with inp.raw_mode(), inp.attach(on_readable):
         try:
@@ -592,18 +603,19 @@ async def watch_escape(on_skip):
                 flush_handle.cancel()
 
 
-async def skip_or_wait(coro, description: str):
+class UserSkipError(RuntimeError):
+    "用户跳过"
+
+
+async def skip_or_wait[T](coro: Coroutine[Any, Any, T], description: str) -> T:
     skip = asyncio.Event()
-    # yield 值 = 监听是否真的启动：False（非 tty）时不可能有按键到达，
-    # 不进竞速，直接普通等待
-    async with watch_escape(skip.set) as listening:
+    async with handle_escape(skip.set) as listening:
         if not listening:
             return await coro
-        task = asyncio.ensure_future(coro)
+        task = asyncio.create_task(coro)
         skip_task = asyncio.create_task(skip.wait())
         try:
-            await asyncio.wait({task, skip_task},
-                               return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait({task, skip_task}, return_when=asyncio.FIRST_COMPLETED)
             if task.done() and not task.cancelled():
                 return task.result()
             raise UserSkipError(description)
@@ -620,9 +632,7 @@ async def main():
         print("自动等待完成")
     except UserSkipError:
         print("已跳过自动等待，转人工。")
-        await asyncio.to_thread(
-            input, "请手动完成操作后按回车继续："
-        )
+        await asyncio.to_thread(input, "请手动完成操作后按回车继续：")
         print("人工处理确认，从断点继续。")
     print("脚本继续执行后续步骤……")
 
@@ -631,12 +641,44 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-与 demo.py 的差异只剩两处：`watch_escape` 的实现（收益所在），以及 `skip_or_wait` 用 `as listening` 消费了它的 yield 值——非 tty 时直接 `return await coro`，退化路径从 demo.py 的"内部静默"变成显式分支。上文 pty 用例对 demo_pt.py 全部实测通过——Esc 触发跳过、`\x1b[A` 不触发、Ctrl-C 中断、监听期 ECHO 关闭且退出后恢复、Esc → 回车闭环、stdin 接管道时正常退化为普通等待。但有三件事库**不**替你做，仍要自己处理：
+#### 两次 `handle`：立即分发 + 防抖 flush
+
+`on_readable` 里 `handle` 被调了两次——一次在读键当下，一次在 50ms 之后。这不是重复，两次拿到的**不是同一批按键**：
+
+| 调用                       | 拿到什么                                    | 解决什么                                          |
+| :------------------------- | :------------------------------------------ | :------------------------------------------------ |
+| `handle(inp.read_keys())`  | 本次字节里解析器已**解析完成**的键           | 确定的键（Ctrl-C、普通字符、完整转义序列）零延迟响应 |
+| `handle(inp.flush_keys())` | 还**悬置**在 VT100 解析器缓冲里的字节        | 尾部孤立的 `\x1b`——它可能是方向键序列的首字节        |
+
+悬置是解析器的必要行为：`read_keys()` 不会一收到 `\x1b` 就产出 `Keys.Escape`，而是缓存观望，等后续字节判断它是不是 `\x1b[A`（↑）这类序列的开头。`flush_keys()` 则是"不再等了，按现状解析"——prompt_toolkit 源码的注释直白到可作标题：*"Used for flushing the 'escape' key."* 所以 Esc 的最终判定必然发生在 flush 里。
+
+那 50ms 是**防抖**：每次 `on_readable` 先 `flush_handle.cancel()` 掉上一个定时器，再 `call_later(0.05, ...)` 重排一个。于是"窗口内来了新字节 → 计时器重置、继续等序列凑齐；静默 50ms → flush 裁决"。两个极端都要避免：
+
+- **读完立刻 flush**：`ESC [` 与 `A` 被 pty/SSH 拆成两次到达时，第一轮就把悬置的 `\x1b` 误判成 Esc——既丢了 ↑，又误触发跳过。`cancel()` 防的就是它。
+- **窗口短过字节间隔**：慢速链路里 `\x1b[A` 三个字节间隔超过 50ms，中途就被 flush 成 Esc，用户按 ↑ 结果直接转人工。窗口拉长则换到另一个失败方向（见坑位清单"Unix：Esc 的转义序列歧义"），50ms 是在两个失败方向之间取的平衡。
+
+#### `create_task` 还是 `ensure_future`：参数类型要配套
+
+`skip_or_wait` 里业务任务包成 Task：这里写 `asyncio.create_task(coro)`，前文版本二和 demo.py 写的是 `asyncio.ensure_future(coro)`。两者等价，是同一件事的新旧两代 API——`ensure_future` 是 3.4 时代的通用接口，`create_task` 是 3.7+ 的明确版：
+
+|                  | `ensure_future`（旧写法）                         | `create_task`（本文代码）        |
+| :--------------- | :------------------------------------------------ | :------------------------------- |
+| 接受的入参       | 任意 awaitable：协程、Future/Task、`__await__` 对象 | **仅协程对象**，其余 `TypeError`  |
+| 传入 Future/Task | 原样返回，不再调度                                 | 报错                             |
+| 事件循环         | 曾有 `loop=` 参数（3.8 弃用、3.10 移除）           | `get_running_loop()`，须在运行中  |
+
+怎么选看参数：本文参数标注 `coro: Coroutine[Any, Any, T]`，必为协程对象、必在运行中的 loop 里被调用，`create_task` 的严格性恰好把"传错 awaitable"挡在类型检查里而不是运行时；而且 `asyncio.wait` 只收 Task/Future（见坑位清单），包 Task 本来就是必须的。仍需 `ensure_future` 的场景只剩一种——入参可能是 Future/Task 或第三方 awaitable、需要"统一转 Future"时；版本二的 `factory: Callable[[], Awaitable[T]]` 搭 `ensure_future` 正是这个用法。
+
+类型标注也跟着配套：用 `Coroutine[Any, Any, T]` 而不是 `Awaitable[T]`（`create_task` 只收协程，标注必须和实现一致，否则类型检查放行、运行时 `TypeError`），也不是 `types.CoroutineType`（运行时具体类型，裸写会把协程返回值类型丢成 `Any`）。`[T]` 是 PEP 695 的函数级泛型（Python 3.12+），配上 `-> T`，调用方 `await skip_or_wait(fetch(), …)` 能拿到结果的具体类型。
+
+代价要说明：协程由调用点**急切**创建（`skip_or_wait(asyncio.sleep(60), …)`），若异常发生在 `create_task` 之前——比如上下文管理器的 `__aenter__` 出错——这个协程就无人接手，落一条 `RuntimeWarning: coroutine 'sleep' was never awaited`。坑位清单里"漏写 async"那条就是这个窗口的典型现场；想彻底消除就用版本二的惰性 `factory` 写法。
+
+结构上与 demo.py 的差异集中在两处：监听实现（`handle_escape` 一份代码通吃双平台）和 `skip_or_wait` 的显式退化分支——`as listening` 消费上下文管理器的 yield 值，非 tty 时直接 `return await coro`，退化路径从 demo.py 的"内部静默"变成看得见的分支。上文 pty 用例对 demo_pt.py 全部实测通过——Esc 触发跳过、`\x1b[A` 不触发、Ctrl-C 中断、监听期 ECHO 关闭且退出后恢复、Esc → 回车闭环、stdin 接管道时正常退化为普通等待。但有三件事库**不**替你做，仍要自己处理：
 
 :::: warning prompt_toolkit 仍需自己处理的三件事
-1. **独立 Esc 的判定窗口要自己排**。`read_keys()` 只解析"本次读到的字节"，尾部孤立的 `\x1b` 会留在解析器里等后续字节——它可能是方向键序列的首字节。prompt_toolkit 自家的 Application 是在每次输入后起一个 0.5 秒定时器（`ttimeoutlen`）再 `flush_keys()` 冲出悬置按键；demo 里沿用前文的 50ms 窗口做同一件事。
-2. **Ctrl-C 要自己补发**。`raw_mode()` 是完整 raw：源码里 `_patch_lflag` 清掉了 `ISIG`，`\x03` 以普通按键身份到达回调。不处理它，等待期间用户就失去了中断能力——在回调里把 `Keys.ControlC` 转成 `KeyboardInterrupt`。
-3. **`isatty()` 守卫与残余按键照旧**。非 tty 的退化逻辑仍在 `watch_escape` 入口；Unix 下退出后想清掉"已敲未读"的按键，保留前文那行 `termios.tcflush` 即可。
+1. **独立 Esc 的判定窗口要自己排**。何时 `flush_keys()` 由你定——上文"两次 `handle`"一节的防抖写法；prompt_toolkit 自家的 Application 用 0.5 秒定时器（`ttimeoutlen`），本文沿用前文的 50ms。
+2. **Ctrl-C 要自己补发**。`raw_mode()` 清掉了 `ISIG`（见上文标志位表），`\x03` 以 `Keys.ControlC` 身份到达回调，在 `handle` 里转成 `KeyboardInterrupt`，否则等待期间用户失去中断能力。
+3. **`isatty()` 守卫与残余按键照旧**。非 tty 的退化逻辑仍在 `handle_escape` 入口；Unix 下退出后想清掉"已敲未读"的按键，保留前文那行 `termios.tcflush` 即可。
 ::::
 
 ### Textual：当"人工接管"值得一块屏幕
@@ -727,7 +769,7 @@ cbreak 模式下如果异常退出没恢复，用户会面对一个**无回显�
 
 :::: details Unix：Esc 的转义序列歧义
 
-Esc 键发送 `\x1b`，而方向键发送 `\x1b[A`、F1 发送 `\x1bOP`——首字节相同。读到 `\x1b` 后**等一个短窗口（约 50ms）**：没有后续字节才算独立 Esc。代价：50ms 内紧跟其他按键的 Esc 会被误判为序列吞掉（连按才会触发，正常单击无碍）。Windows 的 `getwch` 直接读控制台键码，**没有这个问题**。
+Esc 键发送 `\x1b`，而方向键发送 `\x1b[A`、F1 发送 `\x1bOP`——首字节相同。读到 `\x1b` 后**等一个短窗口（约 50ms）**：没有后续字节才算独立 Esc，且每个新字节都会重置窗口（防抖，见 prompt_toolkit 一节）。两个方向都有代价：窗口内紧跟其他按键的 Esc 会被拼进缓冲、误判为序列吞掉（连按才会触发，正常单击无碍）；反过来窗口短过字节间隔——高延迟链路里 `\x1b[A` 拆包到达——序列会被中途判成 Esc，按 ↑ 变成转人工。Windows 的 `getwch` 直接读控制台键码，**没有这个问题**。
 ::::
 
 :::: details stdin 只能有一个读者
