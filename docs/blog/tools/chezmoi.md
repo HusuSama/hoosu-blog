@@ -385,6 +385,38 @@ README.md
 
 `.gitignore` 则控制 Git 对未跟踪文件的忽略，不代替 chezmoi 的添加或应用规则。两种忽略文件都不会自动撤销已有的 Git 跟踪；提交前仍需检查管理目录和暂存区。
 
+### 目标目录与跨平台路径
+
+chezmoi 的**目标目录**是实际配置路径的根目录，默认是当前用户的主目录：macOS/Linux 的 `~`，Windows 通常是 `%USERPROFILE%`。`chezmoi add ~/.pi` 只是添加主目录下的 `.pi`，不会改变目标目录。目标目录可通过命令行 `--destination`（`-D`）单次指定，也可在本机 `chezmoi.toml` 中配置 `destDir`；修改它会影响整套配置的目标根目录。
+
+`.chezmoiignore` 中的规则相对于目标目录写，不是相对于 chezmoi 管理目录，也不写 `dot_` 等源文件名属性。路径统一使用 `/`：例如 `.pi/agent/settings.json` 对应默认目标目录下的 `~/.pi/agent/settings.json`，在 Windows 上则对应 `%USERPROFILE%\.pi\agent\settings.json`。
+
+若不同系统的应用配置路径不同，可在 `.chezmoiignore` 中按系统排除不适用的那一份。例如 Windows 使用 `%USERPROFILE%\Remoting\.toolconfig`，macOS/Linux 使用 `~/.config/.toolconfig`：
+
+```text title=".chezmoiignore"
+{{ if eq .chezmoi.os "windows" }}
+.config/.toolconfig
+{{ else }}
+Remoting/.toolconfig
+{{ end }}
+```
+
+这只决定哪些目标路径在当前系统生效；在 chezmoi 管理目录中，两个目标路径仍需各有对应源文件。若它们的配置内容相同，可用 `.chezmoitemplates/` 复用模板，避免重复维护：
+
+```text
+.chezmoitemplates/toolconfig
+dot_config/dot_toolconfig.tmpl
+Remoting/dot_toolconfig.tmpl
+```
+
+两个 `.tmpl` 文件都写入：
+
+```gotemplate
+{{ includeTemplate "toolconfig" . }}
+```
+
+其中 `.chezmoitemplates/toolconfig` 保存共用内容；两个源文件分别生成 `~/.config/.toolconfig` 和 `~/Remoting/.toolconfig`。若 `.toolconfig` 是目录，则在两条源路径下为需要共用的每个文件建立模板。平台间配置内容确有差异时，可在共用模板内按 `.chezmoi.os` 分支处理。
+
 ### 加密文件与密码管理器
 
 | 方法 | 适合内容 | 前置条件与边界 |
